@@ -1,17 +1,3 @@
-let time f x =
-    let t = Sys.time() in
-    let fx = f x in
-    Printf.printf "Execution time: %fs\n" (Sys.time() -. t);
-    fx
-
-let rl n b =
-  Random.init 42;
-  Array.to_list (Array.init n (fun _ -> Random.int b))
-
-let rlnz n b =
-  Random.init 42;
-  Array.to_list (Array.init n (fun _ -> (Random.int b) + 1))
-                
 let foo l =
   let p = ref 1 in
   let z = ref 0 in
@@ -42,3 +28,18 @@ let foo3 a =
   loopFromRight ((Array.length a)-1) 1;;
 
 (* Large numbers or long lists and overflows? Long lists and stack overflows. The list versions should not stack overflow because map is "tail recursive modulo cons", but I guess the ocaml interpreter does not know that... *)
+
+
+let time f x =
+    let t = Sys.time() in
+    let fx = f x in
+    Printf.printf "Execution time: %fs\n" (Sys.time() -. t);
+    fx;;
+
+let rl n b =
+  Random.init 42;
+  Array.to_list (Array.init n (fun _ -> Random.int b));;
+
+let rlnz n b =
+  Random.init 42;
+  Array.to_list (Array.init n (fun _ -> (Random.int b) + 1));;
