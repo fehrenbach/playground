@@ -1,0 +1,196 @@
+var db = database "stefan";
+
+var agencies = table ("agencies") with
+  (id : Int,
+   name : String,
+   based_in : String,
+   phone : String) from db;
+
+var externaltours = table ("externaltours") with
+  (id : Int,
+   name : String,
+   destination : String,
+   type : String,
+   price : Int) from db;
+
+# select e.name, a.phone
+# from agencies a, externaltours e
+# where a.name = e.name
+#   and e.type = 'boat';
+
+fun q1() {
+  query { for (a <-- agencies,
+               e <-- externaltours)
+          where (a.name == e.name && e.type == "boat")
+            [(name = e.name, phone = a.phone)] }
+}
+
+fun q2() {
+  query { for (a <-- agencies,
+               e <-- externaltours)
+          where (a.name == e.name && e.type == "boat")
+            [(name = e.name,
+              p_name_r = "externaltours",
+              p_name_c = "name",
+              p_name_t = e.id,
+              phone = a.phone,
+              p_phone_r = "agencies",
+              p_phone_c = "phone",
+              p_phone_t = a.id)] }
+}
+
+# ++ forces list semantics (or something?)
+#
+# (q ++ r) translates to union all, with a guarantee that results from
+# q appear before results from r but as far as I can tell, there is no
+# ordering restriction imposed on the ordering within q and r, so we
+# might get something like this: reverse(q) ++ shuffle(r). In practice
+# this probably does not happen. In practice, union all probably also
+# works by just concatenating from left to right. Of course, that's
+# not good enough to claim anything. Is union all allowed to reorder
+# results?
+fun q3() {
+  query { (for (a <-- agencies) [(name = a.name)])
+       ++ (for (e <-- externaltours) [(name = e.name)])
+  }
+}
+
+fun q4() {
+  query { (for (a <-- agencies) [(name = a.name, p_name_r = "agencies", p_name_t = a.id)])
+       ++ (for (e <-- externaltours) [(name = e.name, p_name_r = "externaltours", p_name_t = e.id)])
+  }
+}
+
+fun q5() {
+  query { for (a <-- agencies) [(name = if (a.name == "BayTours") a.name else "foo")] }
+}
+
+# I use dummy values -1 and "⊥" here. The query should probably return
+# SQL NULLs. Is there support in Links for NULL? Does not look like
+# it. Should there be? Or should we be using Maybe? O.o Links' current
+# handling of NULLs is not exactly graceful. With a NULL in `id`:
+#
+# Generated query: select (t1707."id") as "id" from agencies as t1707
+# *** Fatal error : num_of_string
+fun q6() {
+  query { for (a <-- agencies) [(name     = if (a.name == "BayTours") a.name else "foo",
+                                 p_name_r = if (a.name == "BayTours") "agencies" else "⊥",
+                                 p_name_c = if (a.name == "BayTours") "name" else "⊥",
+                                 p_name_t = if (a.name == "BayTours") a.id else -1)]
+  }
+}
+
+# query { for (a <-- agencies) [(id=a.id)] }
+
+var xml = table ("xml") with
+    (id : Int,
+     parent : Int,
+     name : String,
+     pre : Int,
+     post : Int) from db;
+
+# Generated query:
+# select (t1752."name") as "name"
+#   from xml as t1751, xml as t1752
+#  where ((t1751."parent") = (-(1)))
+#    and (exists (select 0 as dummy
+#                   from xml as t1756
+#                  where ((t1751."id") = (t1756."parent"))
+#                    and ((t1756."id") = (t1752."parent"))))
+
+fun q7() {
+  query {
+    for (root  <-- xml,
+         grandchild <-- xml)
+    where (root.parent == -1 &&
+           not(empty(for (parent <-- xml)
+                     where (root.id == parent.parent && parent.id == grandchild.parent)
+                       [()])))
+     [(name=grandchild.name)]
+  }
+}
+
+# So, this query was a lot more complicated. Why is the provenance
+# query not more interesting? Because all the interesting stuff
+# happens in the `where`. Need to come up with an example that does
+# interesting things in the "body", like build up intermediary data
+# structures that are not relations. There has to be something like
+# that in one of the papers...
+fun q8() {
+  query {
+    for (root  <-- xml,
+         grandchild <-- xml)
+    where (root.parent == -1 &&
+           not(empty(for (parent <-- xml)
+                     where (root.id == parent.parent && parent.id == grandchild.parent)
+                       [()])))
+     [(name = grandchild.name,
+       p_name_r = "xml",
+       p_name_c = "name",
+       p_name_t = grandchild.id)]
+  }
+}
+
+# Alright, use the example from Cooper.
+var teams = table ("teams") with
+    (name : String) from db;
+
+var players = table ("players") with
+    (id : Int,
+     name : String,
+     team : String) from db;
+
+fun teamRosters() {
+  for (t <- asList(teams))
+    [(name = t.name,
+      roster = for (p <-- players)
+               where (p.team == t.name)
+                 [(playerName = p.name)])]
+}
+
+fun usablePlayers() {
+  query {
+    for (t <- teamRosters())
+    where (length(t.roster) >= 9)
+      t.roster
+  }
+}
+
+sig q9 : () -> [(playerName:String)]
+fun q9() {
+  query { usablePlayers() }
+}
+
+# Alright, that was a bit more interesting. What did we learn? We have
+# to possibly change functions to pass provenance information through.
+# Question is: do it like this? Top down figure out what we need and
+# see that it's passed through, or can we normalize first and then
+# look at the normalized form?
+fun teamRosters2() {
+  for (t <- asList(teams))
+    [(name = t.name,
+      roster = for (p <-- players)
+               where (p.team == t.name)
+                 [(playerName = p.name,
+                   p_playerName_t = p.id)])]
+}
+
+fun usablePlayers2() {
+  query {
+    for (t <- teamRosters2())
+    where (length(t.roster) >= 9)
+      t.roster
+  }
+}
+
+fun q10() {
+  query {
+    for (t <- usablePlayers2())
+      [(playerName = t.playerName,
+        p_playerName_r = "players", # can figure these out statically
+        p_playerName_c = "name",
+        p_playerName_t = t.p_playerName_t)] # need to pass this through, so need to modify usablePlayers and teamRosters
+  }
+}
+
+q1()
