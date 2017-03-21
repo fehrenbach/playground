@@ -1,6 +1,21 @@
 import Data.Vect
 import Data.Fin
 
+total
+mapIndexed : (a -> Nat -> b) -> List a -> List b
+mapIndexed f l = go l Z
+  where go [] i = []
+        go (x :: xs) i = f x i :: go xs (S i)
+
+total fst3 : (a, b, c) -> a
+fst3 = fst
+
+total snd3 : (a, b, c) -> b
+snd3 = fst . snd
+
+total thd3 : (a, b, c) -> c
+thd3 = snd . snd
+
 data Ty = TyInt | TyBool | TyList Ty | TyFun Ty Ty
 
 total
@@ -24,6 +39,8 @@ using (G: Vect n Ty)
     Op  : (interpTy a -> interpTy b -> interpTy c) -> Expr G a -> Expr G b -> Expr G c
     If  : Expr G TyBool -> Lazy (Expr G a) -> Lazy (Expr G a) -> Expr G a
     Cup : Expr G (TyList a) -> Expr G (TyList a) -> Expr G (TyList a)
+    For : Expr (a :: G) (TyList b) -> Expr G (TyList a) -> Expr G (TyList b)
+    Singleton : Expr G t -> Expr G (TyList t)
 
   data Env : Vect n Ty -> Type where
     Nil  : Env Nil
@@ -43,8 +60,11 @@ using (G: Vect n Ty)
   eval env (Op op x y) = op (eval env x) (eval env y)
   eval env (If x y z) = if eval env x then eval env y else eval env z
   eval env (Cup x y) = eval env x ++ eval env y
+  eval env (For body input) =
+    concatMap (\x => eval (x :: env) body) (eval env input)
+  eval env (Singleton x) = [ eval env x ]
 
-  data Trace = TVar | TVal t | TLam | TApp Trace Trace | TOp Trace Trace | TIf Bool Trace Trace | TCup Trace Trace
+  data Trace = TVar | TVal t | TLam | TApp Trace Trace | TOp Trace Trace | TIf Bool Trace Trace | TCup Trace Trace | TFor Trace (List (Nat, Trace)) | TSingleton Trace
 
   total
   teval : Env G -> Expr G t -> (interpTy t, Trace)
@@ -70,6 +90,16 @@ using (G: Vect n Ty)
     let (vx, tx) = teval env x
         (vy, ty) = teval env y
     in (vx ++ vy, TCup tx ty)
+  teval env (For body input) =
+    let
+      (vinput, tinput) = teval env input
+      res = mapIndexed (\x => \i => (i, teval (x :: env) body)) vinput
+      v = concatMap snd3 res
+      t = TFor tinput (map (\p => (fst3 p, thd3 p)) res)
+    in (v, t)
+  teval env (Singleton x) =
+    let (vx, tx) = teval env x
+    in ([ vx ], TSingleton tx)
 
   one : Expr G TyInt
   one = Val 1
@@ -82,3 +112,9 @@ using (G: Vect n Ty)
 
   l23456 : Expr G (TyList TyInt)
   l23456 = Op map incr l12345
+
+  l34567 : Expr G (TyList TyInt)
+  l34567 = For (Singleton (Op (+) (Var Stop) one)) l23456
+
+  l357 : Expr G (TyList TyInt)
+  l357 = For (If (Op (\x => \y => mod x 2 == y) (Var Stop) one) (Singleton (Var Stop)) (Val [])) l34567
