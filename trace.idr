@@ -16,8 +16,8 @@ snd3 = fst . snd
 total thd3 : (a, b, c) -> c
 thd3 = snd . snd
 
-data Trace = TVar | TVal t | TLam | TApp Trace Trace | TOp Trace Trace | TIf Bool Trace Trace
-           | TCup Trace Trace | TFor Trace (List (Nat, Trace)) | TSingleton Trace | TTrace
+data ATrace = TVar | TVal t | TLam | TApp ATrace ATrace | TOp ATrace ATrace | TIf Bool ATrace ATrace
+            | TCup ATrace ATrace | TFor ATrace (List (Nat, ATrace)) | TSingleton ATrace | TTrace
 
 data Ty = TyInt | TyBool | TyList Ty | TyFun Ty Ty | TyTraced Ty
 
@@ -27,7 +27,7 @@ interpTy TyInt = Int
 interpTy TyBool = Bool
 interpTy (TyList x) = List (interpTy x)
 interpTy (TyFun A T) = interpTy A -> interpTy T
-interpTy (TyTraced t) = (interpTy t, Trace)
+interpTy (TyTraced t) = (interpTy t, ATrace)
 
 using (G: Vect n Ty)
 
@@ -45,7 +45,7 @@ using (G: Vect n Ty)
     Cup : Expr G (TyList a) -> Expr G (TyList a) -> Expr G (TyList a)
     For : Expr (a :: G) (TyList b) -> Expr G (TyList a) -> Expr G (TyList b)
     Singleton : Expr G t -> Expr G (TyList t)
-    Traced : Expr G t -> Expr G (TyTraced t)
+    Trace : Expr G t -> Expr G (TyTraced t)
     Data : Expr G (TyTraced t) -> Expr G t
 
   data Env : Vect n Ty -> Type where
@@ -58,7 +58,7 @@ using (G: Vect n Ty)
   lookup (Pop x) (y :: z) = lookup x z
 
   total
-  teval : Env G -> Expr G t -> (interpTy t, Trace)
+  teval : Env G -> Expr G t -> (interpTy t, ATrace)
   teval env (Var x) = (lookup x env, TVar)
   teval env (Val x) = (x, TVal x)
   teval env (Lam e) = (\x => fst (teval (x :: env) e), TLam)
@@ -94,7 +94,7 @@ using (G: Vect n Ty)
   -- TTrace is a bit useless, maybe even harmful? We don't really need or want nested `traced` blocks.
   -- Options: - add more type state to Expr, to track whether we are inside a trace block already.
   --          - can we change interpTy (TyTrace t) to avoid nesting?
-  teval env (Traced e) = (teval env e, TTrace)
+  teval env (Trace e) = (teval env e, TTrace)
   teval env (Data e) = fst (teval env e)
 
   total
@@ -109,7 +109,7 @@ using (G: Vect n Ty)
   eval env (For body input) =
     concatMap (\x => eval (x :: env) body) (eval env input)
   eval env (Singleton x) = [ eval env x ]
-  eval env (Traced e) = teval env e
+  eval env (Trace e) = teval env e
   eval env (Data e) = fst (eval env e)
 
   one : Expr G TyInt
@@ -134,7 +134,7 @@ using (G: Vect n Ty)
   multl12l23 = For (For (Singleton (Op (*) (Var Stop) (Var (Pop Stop)))) l23456) l12345
 
   traceMult : Expr G (TyTraced (TyList TyInt))
-  traceMult = Traced multl12l23
+  traceMult = Trace multl12l23
 
   -- should be equal to multl12l23
   dataTraceMult : Expr G (TyList TyInt)
