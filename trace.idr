@@ -1,5 +1,6 @@
 import Data.Vect
 import Data.Fin
+import Record
 
 total
 mapIndexed : (a -> Nat -> b) -> List a -> List b
@@ -18,6 +19,7 @@ thd3 = snd . snd
 
 data ATrace = TVar | TVal t | TLam | TApp ATrace ATrace | TOp ATrace ATrace | TIf Bool ATrace ATrace
             | TCup ATrace ATrace | TFor ATrace (List (Nat, ATrace)) | TSingleton ATrace | TTrace
+            | TTable String
 
 data Ty = TyInt | TyBool | TyList Ty | TyFun Ty Ty | TyTraced Ty
 
@@ -47,6 +49,7 @@ using (G: Vect n Ty)
     Singleton : Expr G t -> Expr G (TyList t)
     Trace : Expr G t -> Expr G (TyTraced t)
     Data : Expr G (TyTraced t) -> Expr G t
+    Table : String -> List (interpTy t) -> Expr G (TyList t)
 
   data Env : Vect n Ty -> Type where
     Nil  : Env Nil
@@ -96,6 +99,7 @@ using (G: Vect n Ty)
   --          - can we change interpTy (TyTrace t) to avoid nesting?
   teval env (Trace e) = (teval env e, TTrace)
   teval env (Data e) = fst (teval env e)
+  teval env (Table n d) = (d, TTable n)
 
   total
   eval : Env G -> Expr G t -> interpTy t
@@ -111,6 +115,7 @@ using (G: Vect n Ty)
   eval env (Singleton x) = [ eval env x ]
   eval env (Trace e) = teval env e
   eval env (Data e) = fst (eval env e)
+  eval env (Table _ d) = d
 
   one : Expr G TyInt
   one = Val 1
@@ -139,6 +144,6 @@ using (G: Vect n Ty)
   -- should be equal to multl12l23
   dataTraceMult : Expr G (TyList TyInt)
   dataTraceMult = Data traceMult
-
+  
   -- Okay, so this is difficult because of functional extensionality problems.
   -- total teval_consistent : (env : Env G) -> (e : Expr G t) -> eval env e = fst (teval env e)
