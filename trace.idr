@@ -1,6 +1,7 @@
 import Data.Vect
 import Data.Fin
 import Record
+-- import Data.HVect
 
 total
 mapIndexed : (a -> Nat -> b) -> List a -> List b
@@ -19,9 +20,14 @@ thd3 = snd . snd
 
 data ATrace = TVar | TVal t | TLam | TApp ATrace ATrace | TOp ATrace ATrace | TIf Bool ATrace ATrace
             | TCup ATrace ATrace | TFor ATrace (List (Nat, ATrace)) | TSingleton ATrace | TTrace
-            | TTable String
+            | TTable String | TRecordNil | TRecordExt String ATrace ATrace
 
+-- If we need to have the Type in there for records anyways, what do we get out of this?
+-- I guess we constrain the set of types, no dependent pairs or other weird stuff.
+-- Should we just use Idris types everywhere?
 data Ty = TyInt | TyBool | TyList Ty | TyFun Ty Ty | TyTraced Ty
+        -- | TyRecord (List (String, Ty))
+        | TyRecord (List (String, Type))
 
 total
 interpTy : Ty -> Type
@@ -30,6 +36,11 @@ interpTy TyBool = Bool
 interpTy (TyList x) = List (interpTy x)
 interpTy (TyFun A T) = interpTy A -> interpTy T
 interpTy (TyTraced t) = (interpTy t, ATrace)
+-- confuses the totality checker
+-- Is this something that recursion schemes would help with?
+-- We just apply interpTy recursively on every Ty on a finite (and we know this, right?) tree structure
+-- interpTy (TyRecord row) = Record {labelType=String} (map (\(l, t) => (l, interpTy t)) row)
+interpTy (TyRecord row) = Record {labelType=String} row
 
 using (G: Vect n Ty)
 
@@ -49,7 +60,11 @@ using (G: Vect n Ty)
     Singleton : Expr G t -> Expr G (TyList t)
     Trace : Expr G t -> Expr G (TyTraced t)
     Data : Expr G (TyTraced t) -> Expr G t
+    -- how to enforce record of flat base types?
     Table : String -> List (interpTy t) -> Expr G (TyList t)
+    -- This seems to work, but it's annoying.
+    RecordNil : Expr G (TyRecord [])
+    RecordExt : (l : String) -> Expr G t -> Expr G (TyRecord row) -> Expr G (TyRecord ((l, interpTy t) :: row))
 
   data Env : Vect n Ty -> Type where
     Nil  : Env Nil
@@ -100,6 +115,11 @@ using (G: Vect n Ty)
   teval env (Trace e) = (teval env e, TTrace)
   teval env (Data e) = fst (teval env e)
   teval env (Table n d) = (d, TTable n)
+  teval env RecordNil = ([], TRecordNil)
+  teval env (RecordExt l e rec) =
+    let (ve, te) = teval env e
+        (vr, tr) = teval env rec
+    in ((l := ve) :: vr, TRecordExt l te tr)    
 
   total
   eval : Env G -> Expr G t -> interpTy t
@@ -116,6 +136,8 @@ using (G: Vect n Ty)
   eval env (Trace e) = teval env e
   eval env (Data e) = fst (eval env e)
   eval env (Table _ d) = d
+  eval env RecordNil = []
+  eval env (RecordExt l e rec) = (l := eval env e) :: eval env rec
 
   one : Expr G TyInt
   one = Val 1
@@ -144,6 +166,15 @@ using (G: Vect n Ty)
   -- should be equal to multl12l23
   dataTraceMult : Expr G (TyList TyInt)
   dataTraceMult = Data traceMult
+
+  a2 : Expr G (TyRecord [("a", Int)])
+  a2 = RecordExt "a" (Op (+) one one) RecordNil
+
+  true : Expr G TyBool
+  true = Val True
+
+  a2bTrue : Expr G (TyRecord [("b", Bool), ("a", Int)])
+  a2bTrue = RecordExt "b" true a2
   
   -- Okay, so this is difficult because of functional extensionality problems.
   -- total teval_consistent : (env : Env G) -> (e : Expr G t) -> eval env e = fst (teval env e)
