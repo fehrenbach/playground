@@ -26,6 +26,7 @@ mutual
   data Ty = TyInt | TyBool | TyList Ty | TyFun Ty Ty | TyTraced Ty
           | TyRecord RTy
   -- Could call these Nil and :: for syntactic sugar
+  -- Actually, I tried that, but it confuses the totality checker
   data RTy = TyRecordNil | TyRecordExt String Ty RTy
 
 mutual
