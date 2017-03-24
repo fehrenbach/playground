@@ -237,5 +237,38 @@ using (G: Vect n Ty)
       (Singleton (RecordExt "name" (Project "name" (Var Stop)) (RecordExt "phone" (Project "phone" (Var (Pop Stop))) RecordNil)))
       (Val [])) eTours) agencies
 
+  boatToursTracePhone : Expr G (TyList (TyRecord (TyRecordExt "name" TyString (TyRecordExt "phone" TyString (TyRecordExt "phone_trace" (TyTraced TyString) TyRecordNil)))))
+  boatToursTracePhone =
+    For (For (If ((Op2 (the (interpTy TyString -> interpTy TyString -> Bool) (==))
+                       (the (Expr _ TyString) (Project "name" (Var (Pop Stop))))
+                       (the (Expr _ TyString) (Project "name" (Var Stop))))
+                  && (Op2 (the (interpTy TyString -> interpTy TyString -> Bool) (==))
+                       (the (Expr _ TyString) (Project "type" (Var Stop)))
+                       (the (Expr _ TyString) (Val "boat"))))
+      (Singleton (RecordExt "name" (Project "name" (Var Stop))
+                 (RecordExt "phone" (Project "phone" (Var (Pop Stop)))
+                 (RecordExt "phone_trace" (Trace (Project "phone" (Var (Pop Stop))))
+                 RecordNil))))
+      (Val [])) eTours) agencies
+
+  -- [["name" := "EdinTours",
+  --   "phone" := "412 1200",
+  --   "phone_trace" := ("412 1200", TProject "phone" TVar)],
+  --  ["name" := "EdinTours",
+  --   "phone" := "412 1200",
+  --   "phone_trace" := ("412 1200", TProject "phone" TVar)],
+  --  ["name" := "Burns's",
+  --   "phone" := "607 3000",
+  --   "phone_trace" := ("607 3000", TProject "phone" TVar)]]
+  -- : List (Record [("name", String), ("phone", String), ("phone_trace", String, ATrace)])
+
+  -- Maybe my intuition that it would make sense to trace a whole
+  -- query block wasn't so bad after all. Perhaps we could compute the
+  -- full trace, but derive an extraction function from the shape of
+  -- the query that, when applied to the trace, projects out the data
+  -- and provenance as appropriate. Oh. Maybe that's what James meant
+  -- all along and I've been confused all this time. That doesn't even
+  -- sound unlikely. Oh my.
+
   -- Okay, so this is difficult because of functional extensionality problems.
   -- total teval_consistent : (env : Env G) -> (e : Expr G t) -> eval env e = fst (teval env e)
