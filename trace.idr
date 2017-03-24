@@ -1,7 +1,6 @@
 import Data.Vect
 import Data.Fin
 import Record
--- import Data.HVect
 
 total
 mapIndexed : (a -> Nat -> b) -> List a -> List b
@@ -18,9 +17,10 @@ snd3 = fst . snd
 total thd3 : (a, b, c) -> c
 thd3 = snd . snd
 
-data ATrace = TVar | TVal t | TLam | TApp ATrace ATrace | TOp ATrace ATrace | TIf Bool ATrace ATrace
-            | TCup ATrace ATrace | TFor ATrace (List (Nat, ATrace)) | TSingleton ATrace | TTrace
-            | TTable String | TRecordNil | TRecordExt String ATrace ATrace
+data ATrace = TVar | TVal t | TLam | TApp ATrace ATrace | TOp1 ATrace | TOp2 ATrace ATrace
+            | TIf Bool ATrace ATrace | TTrace
+            | TCup ATrace ATrace | TFor ATrace (List (Nat, ATrace)) | TSingleton ATrace | TTable String
+            | TRecordNil | TRecordExt String ATrace ATrace | TProject String ATrace
 
 mutual
   data Ty = TyInt | TyBool | TyList Ty | TyFun Ty Ty | TyTraced Ty
@@ -44,6 +44,15 @@ mutual
   interpRTy TyRecordNil = []
   interpRTy (TyRecordExt l ty rty) = (l, interpTy ty) :: interpRTy rty
 
+data TyLabelPresent : String -> RTy -> Ty -> Type where
+  Here  : TyLabelPresent l (TyRecordExt l ty _) ty
+  There : TyLabelPresent l row ty -> TyLabelPresent l (TyRecordExt _ _ row) ty
+
+-- Convert a proof of label presence for object language records to a proof of label presence for idris records so we can use projection from there
+objToMetaLabelPresenceProof : TyLabelPresent label row ty -> LabelPresent label (interpRTy row) (interpTy ty)
+objToMetaLabelPresenceProof Here = Here
+objToMetaLabelPresenceProof (There prf) = There (objToMetaLabelPresenceProof prf)
+
 using (G: Vect n Ty)
 
   data HasType : (i : Fin n) -> Vect n Ty -> Ty -> Type where
@@ -55,7 +64,8 @@ using (G: Vect n Ty)
     Val : interpTy t -> Expr G t
     Lam : Expr (a :: G) t -> Expr G (TyFun a t)
     App : Expr G (TyFun a t) -> Expr G a -> Expr G t
-    Op  : (interpTy a -> interpTy b -> interpTy c) -> Expr G a -> Expr G b -> Expr G c
+    Op1 : (interpTy a -> interpTy b) -> Expr G a -> Expr G b
+    Op2 : (interpTy a -> interpTy b -> interpTy c) -> Expr G a -> Expr G b -> Expr G c
     If  : Expr G TyBool -> Lazy (Expr G a) -> Lazy (Expr G a) -> Expr G a
     Cup : Expr G (TyList a) -> Expr G (TyList a) -> Expr G (TyList a)
     For : Expr (a :: G) (TyList b) -> Expr G (TyList a) -> Expr G (TyList b)
@@ -66,6 +76,7 @@ using (G: Vect n Ty)
     Table : String -> List (interpTy t) -> Expr G (TyList t)
     RecordNil : Expr G (TyRecord TyRecordNil)
     RecordExt : (l : String) -> Expr G t -> Expr G (TyRecord row) -> Expr G (TyRecord (TyRecordExt l t row))
+    Project : (l : String) -> Expr G (TyRecord row) -> { auto prf : TyLabelPresent l row ty } -> Expr G ty
 
   data Env : Vect n Ty -> Type where
     Nil  : Env Nil
@@ -85,10 +96,13 @@ using (G: Vect n Ty)
     let (vf, tf) = teval env f
         (va, ta) = teval env a
     in (vf va, TApp tf ta)
-  teval env (Op f x y) =
+  teval env (Op1 f x) =
+    let (vx, tx) = teval env x
+    in (f vx, TOp1 tx)
+  teval env (Op2 f x y) =
     let (vx, tx) = teval env x
         (vy, ty) = teval env y
-    in (f vx vy, TOp tx ty)
+    in (f vx vy, TOp2 tx ty)
   teval env (If x y z) =
     let (vx, tx) = teval env x
     -- Idris thinks the nice version might not be total :(
@@ -121,6 +135,9 @@ using (G: Vect n Ty)
     let (ve, te) = teval env e
         (vr, tr) = teval env rec
     in ((l := ve) :: vr, TRecordExt l te tr)
+  teval env (Project l r { prf }) =
+    let (vr, tr) = teval env r
+    in (project' l vr (objToMetaLabelPresenceProof prf), TProject l tr)
 
   total
   eval : Env G -> Expr G t -> interpTy t
@@ -128,7 +145,8 @@ using (G: Vect n Ty)
   eval env (Val v) = v
   eval env (Lam body) = \x => eval (x :: env) body
   eval env (App f e) = eval env f (eval env e)
-  eval env (Op op x y) = op (eval env x) (eval env y)
+  eval env (Op1 f x) = f (eval env x)
+  eval env (Op2 op x y) = op (eval env x) (eval env y)
   eval env (If x y z) = if eval env x then eval env y else eval env z
   eval env (Cup x y) = eval env x ++ eval env y
   eval env (For body input) =
@@ -139,27 +157,28 @@ using (G: Vect n Ty)
   eval env (Table _ d) = d
   eval env RecordNil = []
   eval env (RecordExt l e rec) = (l := eval env e) :: eval env rec
+  eval env (Project l r { prf }) = project' l (eval env r) (objToMetaLabelPresenceProof prf)
 
   one : Expr G TyInt
   one = Val 1
 
   incr : Expr G (TyFun TyInt TyInt)
-  incr = Lam (Op (+) (Var Stop) one)
+  incr = Lam (Op2 (+) (Var Stop) one)
 
   l12345 : Expr G (TyList TyInt)
   l12345 = Val [ 1, 2, 3, 4, 5 ]
 
   l23456 : Expr G (TyList TyInt)
-  l23456 = Op map incr l12345
+  l23456 = Op2 map incr l12345
 
   l34567 : Expr G (TyList TyInt)
-  l34567 = For (Singleton (Op (+) (Var Stop) one)) l23456
+  l34567 = For (Singleton (Op2 (+) (Var Stop) one)) l23456
 
   l357 : Expr G (TyList TyInt)
-  l357 = For (If (Op (\x => \y => mod x 2 == y) (Var Stop) one) (Singleton (Var Stop)) (Val [])) l34567
+  l357 = For (If (Op2 (\x => \y => mod x 2 == y) (Var Stop) one) (Singleton (Var Stop)) (Val [])) l34567
 
   multl12l23 : Expr G (TyList TyInt)
-  multl12l23 = For (For (Singleton (Op (*) (Var Stop) (Var (Pop Stop)))) l23456) l12345
+  multl12l23 = For (For (Singleton (Op2 (*) (Var Stop) (Var (Pop Stop)))) l23456) l12345
 
   traceMult : Expr G (TyTraced (TyList TyInt))
   traceMult = Trace multl12l23
@@ -169,13 +188,16 @@ using (G: Vect n Ty)
   dataTraceMult = Data traceMult
 
   a2 : Expr G (TyRecord (TyRecordExt "a" TyInt TyRecordNil))
-  a2 = RecordExt "a" (Op (+) one one) RecordNil
+  a2 = RecordExt "a" (Op2 (+) one one) RecordNil
 
   true : Expr G TyBool
   true = Val True
 
   a2bTrue : Expr G (TyRecord (TyRecordExt "b" TyBool (TyRecordExt "a" TyInt TyRecordNil)))
   a2bTrue = RecordExt "b" true a2
+
+  a2bTruePa : Expr G TyInt
+  a2bTruePa = Project "a" a2bTrue
 
   -- Okay, so this is difficult because of functional extensionality problems.
   -- total teval_consistent : (env : Env G) -> (e : Expr G t) -> eval env e = fst (teval env e)

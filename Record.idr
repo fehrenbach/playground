@@ -26,12 +26,13 @@ data LabelPresent : labelType -> List (labelType, Type) -> Type -> Type where
 -- jmars's version does not have the label, Edwin's does.
 -- We don't need it, since we pattern match on the proof.
 -- I suspect we should avoid that if we were interested in good erasure behaviour.
-project' : {- (label : labelType) -> -} Record row -> LabelPresent label row typ -> typ
-project' {- label -} ((label := value) :: _) Here = value
-project' {- label -} (_ :: row) (There x) = project' {- label -} row x
+-- Ugh, I'm an idiot. label is a type variable, so it's added as an argument meaning it ends up being exactly the same code except with label being implicit...
+project' : (label : labelType) -> Record row -> LabelPresent label row typ -> typ
+project' label ((label := value) :: _) Here = value
+project' label (_ :: row) (There x) = project' label row x
 
 (.) : Record row -> (label : labelType) -> { auto prf : LabelPresent label row typ } -> typ
-(.) r label {prf} = project' {- label -} r prf
+(.) r label {prf} = project' label r prf
 
 -- to do, or not: record concatenation, field removal, field update, ...
 
