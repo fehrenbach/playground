@@ -18,12 +18,13 @@ total thd3 : (a, b, c) -> c
 thd3 = snd . snd
 
 data ATrace = TVar | TVal t | TLam | TApp ATrace ATrace | TOp1 ATrace | TOp2 ATrace ATrace
+            | TAnd ATrace ATrace -- | TEq ATrace ATrace
             | TIf Bool ATrace ATrace | TTrace
             | TCup ATrace ATrace | TFor ATrace (List (Nat, ATrace)) | TSingleton ATrace | TTable String
             | TRecordNil | TRecordExt String ATrace ATrace | TProject String ATrace
 
 mutual
-  data Ty = TyInt | TyBool | TyList Ty | TyFun Ty Ty | TyTraced Ty
+  data Ty = TyInt | TyBool | TyString | TyList Ty | TyFun Ty Ty | TyTraced Ty
           | TyRecord RTy
   -- Could call these Nil and :: for syntactic sugar
   -- Actually, I tried that, but it confuses the totality checker
@@ -34,6 +35,7 @@ mutual
   interpTy : Ty -> Type
   interpTy TyInt = Int
   interpTy TyBool = Bool
+  interpTy TyString = String
   interpTy (TyList x) = List (interpTy x)
   interpTy (TyFun A T) = interpTy A -> interpTy T
   interpTy (TyTraced t) = (interpTy t, ATrace)
@@ -64,6 +66,11 @@ using (G: Vect n Ty)
     Val : interpTy t -> Expr G t
     Lam : Expr (a :: G) t -> Expr G (TyFun a t)
     App : Expr G (TyFun a t) -> Expr G a -> Expr G t
+    (&&) : Expr G TyBool -> Expr G TyBool -> Expr G TyBool
+    -- Equality is hard... Just eval x == eval y complains about no instance of Eq for (interpTy ty)
+    -- One reason could be: ty could be TyFun, in which case interpTy ty is (a -> b) and function equality is notoriously hard...
+    -- It's probably possible to constrain t to equatable types somehow. For now, just use Op2 with (==) (which unfortunately needs to be ascribed with the correct type :/)
+    -- (==) : Expr G ty -> Expr G ty -> Expr G TyBool
     Op1 : (interpTy a -> interpTy b) -> Expr G a -> Expr G b
     Op2 : (interpTy a -> interpTy b -> interpTy c) -> Expr G a -> Expr G b -> Expr G c
     If  : Expr G TyBool -> Lazy (Expr G a) -> Lazy (Expr G a) -> Expr G a
@@ -96,6 +103,10 @@ using (G: Vect n Ty)
     let (vf, tf) = teval env f
         (va, ta) = teval env a
     in (vf va, TApp tf ta)
+  teval env ((&&) x y) =
+    let (vx, tx) = teval env x
+        (vy, ty) = teval env y
+    in (vx && vy, TAnd tx ty)
   teval env (Op1 f x) =
     let (vx, tx) = teval env x
     in (f vx, TOp1 tx)
@@ -145,6 +156,8 @@ using (G: Vect n Ty)
   eval env (Val v) = v
   eval env (Lam body) = \x => eval (x :: env) body
   eval env (App f e) = eval env f (eval env e)
+  eval env ((&&) x y) = eval env x && eval env y
+  -- eval env ((==) x y) = valueEq (eval env x) (eval env y)
   eval env (Op1 f x) = f (eval env x)
   eval env (Op2 op x y) = op (eval env x) (eval env y)
   eval env (If x y z) = if eval env x then eval env y else eval env z
@@ -198,6 +211,31 @@ using (G: Vect n Ty)
 
   a2bTruePa : Expr G TyInt
   a2bTruePa = Project "a" a2bTrue
+
+  agencies : Expr G (TyList (TyRecord (TyRecordExt "name" TyString (TyRecordExt "based_in" TyString (TyRecordExt "phone" TyString TyRecordNil)))))
+  agencies = Table "agencies"
+    [ [ "name" := "EdinTours", "based_in" := "Edinburgh", "phone" := "412 1200" ],
+      [ "name" := "Burns's", "based_in" := "Glasgow", "phone" := "607 3000" ] ]
+
+  eTours : Expr G (TyList (TyRecord (TyRecordExt "name" TyString (TyRecordExt "destination" TyString (TyRecordExt "type" TyString (TyRecordExt "price" TyInt TyRecordNil))))))
+  eTours = Table "externalTours"
+    [ [ "name" := "EdinTours", "destination" := "Edinburgh", "type" := "bus", "price" := 20 ],
+      [ "name" := "EdinTours", "destination" := "Loch Ness", "type" := "bus", "price" := 50 ],
+      [ "name" := "EdinTours", "destination" := "och Ness", "type" := "boat", "price" := 200 ],
+      [ "name" := "EdinTours", "destination" := "Firth of Forth", "type" := "boat", "price" := 50 ],
+      [ "name" := "Burns's", "destination" := "Islay", "type" := "boat", "price" := 100 ],
+      [ "name" := "Burns's", "destination" := "Mallaig", "type" := "train", "price" := 40 ] ]
+
+  boatTours : Expr G (TyList (TyRecord (TyRecordExt "name" TyString (TyRecordExt "phone" TyString TyRecordNil))))
+  boatTours =
+    For (For (If ((Op2 (the (interpTy TyString -> interpTy TyString -> Bool) (==))
+                       (the (Expr _ TyString) (Project "name" (Var (Pop Stop))))
+                       (the (Expr _ TyString) (Project "name" (Var Stop))))
+                  && (Op2 (the (interpTy TyString -> interpTy TyString -> Bool) (==))
+                       (the (Expr _ TyString) (Project "type" (Var Stop)))
+                       (the (Expr _ TyString) (Val "boat"))))
+      (Singleton (RecordExt "name" (Project "name" (Var Stop)) (RecordExt "phone" (Project "phone" (Var (Pop Stop))) RecordNil)))
+      (Val [])) eTours) agencies
 
   -- Okay, so this is difficult because of functional extensionality problems.
   -- total teval_consistent : (env : Env G) -> (e : Expr G t) -> eval env e = fst (teval env e)
