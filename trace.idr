@@ -17,14 +17,8 @@ snd3 = fst . snd
 total thd3 : (a, b, c) -> c
 thd3 = snd . snd
 
-data ATrace = TVar | TVal t | TLam | TApp ATrace ATrace | TOp1 ATrace | TOp2 ATrace ATrace
-            | TAnd ATrace ATrace -- | TEq ATrace ATrace
-            | TIf Bool ATrace ATrace | TTrace
-            | TCup ATrace ATrace | TFor ATrace (List (Nat, ATrace)) | TSingleton ATrace | TTable String
-            | TRecordNil | TRecordExt String ATrace ATrace | TProject String ATrace
-
 mutual
-  data Ty = TyInt | TyBool | TyString | TyList Ty | TyFun Ty Ty | TyTraced Ty
+  data Ty = TyInt | TyBool | TyString | TyList Ty | TyFun Ty Ty
           | TyRecord RTy
   -- Could call these Nil and :: for syntactic sugar
   -- Actually, I tried that, but it confuses the totality checker
@@ -38,7 +32,6 @@ mutual
   interpTy TyString = String
   interpTy (TyList x) = List (interpTy x)
   interpTy (TyFun A T) = interpTy A -> interpTy T
-  interpTy (TyTraced t) = (interpTy t, ATrace)
   interpTy (TyRecord rty) = Record {labelType=String} (interpRTy rty)
 
   total
@@ -49,6 +42,34 @@ mutual
 data TyLabelPresent : String -> RTy -> Ty -> Type where
   Here  : TyLabelPresent l (TyRecordExt l ty _) ty
   There : TyLabelPresent l row ty -> TyLabelPresent l (TyRecordExt _ _ row) ty
+
+data IsBaseType : Ty -> Type where
+  IntIsBase : IsBaseType TyInt
+  BoolIsBase : IsBaseType TyBool
+  StringIsBase : IsBaseType TyString
+
+data IsBaseRow : RTy -> Type where
+  EmptyRowIsBase : IsBaseRow TyRecordNil
+  ExtRowIsBase : IsBaseType ty -> IsBaseRow row -> IsBaseRow (TyRecordExt _ ty row)
+
+data ATrace : Ty -> Type where
+  -- Probably need an environment too
+  TVar : Nat -> ATrace ty
+  TVal : (interpTy ty) -> ATrace ty
+  TLam : ATrace ty
+  TApp : ATrace (TyFun a b) -> ATrace a -> ATrace b
+  TOp1 : {op : interpTy a -> interpTy b} -> ATrace a -> ATrace b
+  TOp2 : {op : interpTy a -> interpTy b -> interpTy c} -> ATrace a -> ATrace b -> ATrace c
+  TAnd : ATrace TyBool -> ATrace TyBool -> ATrace TyBool
+  TIf : Bool -> ATrace TyBool -> ATrace ty -> ATrace ty
+  TCup : ATrace (TyList ty) -> ATrace (TyList ty) -> ATrace (TyList ty)
+  TFor : ATrace (TyList a) -> List (Nat, ATrace (TyList b)) -> ATrace (TyList b)
+  TSingleton : ATrace ty -> ATrace (TyList ty)
+  TTable : String -> {auto prf : IsBaseRow row} -> ATrace (TyList (TyRecord row))
+  TRecordNil : ATrace (TyRecord TyRecordNil)
+  TRecordExt : (l : String) -> ATrace t -> ATrace (TyRecord row) -> ATrace (TyRecord (TyRecordExt l t row))
+  TProject : (l : String) -> ATrace (TyRecord r) -> { auto prf : TyLabelPresent l r ty } -> ATrace ty
+
 
 -- Convert a proof of label presence for object language records to a proof of label presence for idris records so we can use projection from there
 objToMetaLabelPresenceProof : TyLabelPresent label row ty -> LabelPresent label (interpRTy row) (interpTy ty)
@@ -77,10 +98,7 @@ using (G: Vect n Ty)
     Cup : Expr G (TyList a) -> Expr G (TyList a) -> Expr G (TyList a)
     For : Expr (a :: G) (TyList b) -> Expr G (TyList a) -> Expr G (TyList b)
     Singleton : Expr G t -> Expr G (TyList t)
-    Trace : Expr G t -> Expr G (TyTraced t)
-    Data : Expr G (TyTraced t) -> Expr G t
-    -- how to enforce record of flat base types?
-    Table : String -> List (interpTy t) -> Expr G (TyList t)
+    Table : String -> List (interpTy (TyRecord row)) -> { auto prf : IsBaseRow row } -> Expr G (TyList (TyRecord row))
     RecordNil : Expr G (TyRecord TyRecordNil)
     RecordExt : (l : String) -> Expr G t -> Expr G (TyRecord row) -> Expr G (TyRecord (TyRecordExt l t row))
     Project : (l : String) -> Expr G (TyRecord row) -> { auto prf : TyLabelPresent l row ty } -> Expr G ty
@@ -95,8 +113,13 @@ using (G: Vect n Ty)
   lookup (Pop x) (y :: z) = lookup x z
 
   total
-  teval : Env G -> Expr G t -> (interpTy t, ATrace)
-  teval env (Var x) = (lookup x env, TVar)
+  hasTypeToNat : HasType i G t -> Nat
+  hasTypeToNat Stop = Z
+  hasTypeToNat (Pop x) = S (hasTypeToNat x)
+
+  total
+  teval : Env G -> Expr G t -> (interpTy t, ATrace t)
+  teval env (Var x) = (lookup x env, TVar (hasTypeToNat x))
   teval env (Val x) = (x, TVal x)
   teval env (Lam e) = (\x => fst (teval (x :: env) e), TLam)
   teval env (App f a) =
@@ -109,11 +132,11 @@ using (G: Vect n Ty)
     in (vx && vy, TAnd tx ty)
   teval env (Op1 f x) =
     let (vx, tx) = teval env x
-    in (f vx, TOp1 tx)
+    in (f vx, TOp1 {op = f} tx)
   teval env (Op2 f x y) =
     let (vx, tx) = teval env x
         (vy, ty) = teval env y
-    in (f vx vy, TOp2 tx ty)
+    in (f vx vy, TOp2 {op=f} tx ty)
   teval env (If x y z) =
     let (vx, tx) = teval env x
     -- Idris thinks the nice version might not be total :(
@@ -137,9 +160,9 @@ using (G: Vect n Ty)
     in ([ vx ], TSingleton tx)
   -- TTrace is a bit useless, maybe even harmful? We don't really need or want nested `traced` blocks.
   -- Options: - add more type state to Expr, to track whether we are inside a trace block already.
-  --          - can we change interpTy (TyTrace t) to avoid nesting?
-  teval env (Trace e) = (teval env e, TTrace)
-  teval env (Data e) = fst (teval env e)
+  --          - can we change interpTy (TyTrace t) to avoid nesting
+  -- teval env (Trace e) = (teval env e, TTrace)
+  -- teval env (Data e) = fst (teval env e)
   teval env (Table n d) = (d, TTable n)
   teval env RecordNil = ([], TRecordNil)
   teval env (RecordExt l e rec) =
@@ -165,8 +188,6 @@ using (G: Vect n Ty)
   eval env (For body input) =
     concatMap (\x => eval (x :: env) body) (eval env input)
   eval env (Singleton x) = [ eval env x ]
-  eval env (Trace e) = teval env e
-  eval env (Data e) = fst (eval env e)
   eval env (Table _ d) = d
   eval env RecordNil = []
   eval env (RecordExt l e rec) = (l := eval env e) :: eval env rec
@@ -193,12 +214,12 @@ using (G: Vect n Ty)
   multl12l23 : Expr G (TyList TyInt)
   multl12l23 = For (For (Singleton (Op2 (*) (Var Stop) (Var (Pop Stop)))) l23456) l12345
 
-  traceMult : Expr G (TyTraced (TyList TyInt))
-  traceMult = Trace multl12l23
+  -- traceMult : Expr G (TyTraced (TyList TyInt))
+  -- traceMult = Trace multl12l23
 
   -- should be equal to multl12l23
-  dataTraceMult : Expr G (TyList TyInt)
-  dataTraceMult = Data traceMult
+  -- dataTraceMult : Expr G (TyList TyInt)
+  -- dataTraceMult = Data traceMult
 
   a2 : Expr G (TyRecord (TyRecordExt "a" TyInt TyRecordNil))
   a2 = RecordExt "a" (Op2 (+) one one) RecordNil
@@ -237,19 +258,19 @@ using (G: Vect n Ty)
       (Singleton (RecordExt "name" (Project "name" (Var Stop)) (RecordExt "phone" (Project "phone" (Var (Pop Stop))) RecordNil)))
       (Val [])) eTours) agencies
 
-  boatToursTracePhone : Expr G (TyList (TyRecord (TyRecordExt "name" TyString (TyRecordExt "phone" TyString (TyRecordExt "phone_trace" (TyTraced TyString) TyRecordNil)))))
-  boatToursTracePhone =
-    For (For (If ((Op2 (the (interpTy TyString -> interpTy TyString -> Bool) (==))
-                       (the (Expr _ TyString) (Project "name" (Var (Pop Stop))))
-                       (the (Expr _ TyString) (Project "name" (Var Stop))))
-                  && (Op2 (the (interpTy TyString -> interpTy TyString -> Bool) (==))
-                       (the (Expr _ TyString) (Project "type" (Var Stop)))
-                       (the (Expr _ TyString) (Val "boat"))))
-      (Singleton (RecordExt "name" (Project "name" (Var Stop))
-                 (RecordExt "phone" (Project "phone" (Var (Pop Stop)))
-                 (RecordExt "phone_trace" (Trace (Project "phone" (Var (Pop Stop))))
-                 RecordNil))))
-      (Val [])) eTours) agencies
+  -- boatToursTracePhone : Expr G (TyList (TyRecord (TyRecordExt "name" TyString (TyRecordExt "phone" TyString (TyRecordExt "phone_trace" (TyTraced TyString) TyRecordNil)))))
+  -- boatToursTracePhone =
+  --   For (For (If ((Op2 (the (interpTy TyString -> interpTy TyString -> Bool) (==))
+  --                      (the (Expr _ TyString) (Project "name" (Var (Pop Stop))))
+  --                      (the (Expr _ TyString) (Project "name" (Var Stop))))
+  --                 && (Op2 (the (interpTy TyString -> interpTy TyString -> Bool) (==))
+  --                      (the (Expr _ TyString) (Project "type" (Var Stop)))
+  --                      (the (Expr _ TyString) (Val "boat"))))
+  --     (Singleton (RecordExt "name" (Project "name" (Var Stop))
+  --                (RecordExt "phone" (Project "phone" (Var (Pop Stop)))
+  --                (RecordExt "phone_trace" (Trace (Project "phone" (Var (Pop Stop))))
+  --                RecordNil))))
+  --     (Val [])) eTours) agencies
 
   -- [["name" := "EdinTours",
   --   "phone" := "412 1200",
@@ -272,3 +293,46 @@ using (G: Vect n Ty)
 
   -- Okay, so this is difficult because of functional extensionality problems.
   -- total teval_consistent : (env : Env G) -> (e : Expr G t) -> eval env e = fst (teval env e)
+
+total
+whereTy : Ty -> Ty
+whereTy t = TyRecord (TyRecordExt "data" t
+                     (TyRecordExt "row" TyInt
+                     (TyRecordExt "table" TyString
+                     (TyRecordExt "column" TyString
+                     TyRecordNil))))
+mutual
+  total
+  everyWhereTy : Ty -> Ty
+  everyWhereTy TyInt = whereTy TyInt
+  everyWhereTy TyBool = whereTy TyBool
+  everyWhereTy TyString = whereTy TyString
+  everyWhereTy (TyList x) = TyList (everyWhereTy x)
+  everyWhereTy (TyFun x y) = TyFun (everyWhereTy x) (everyWhereTy y)
+  everyWhereTy (TyRecord r) = TyRecord (everyWhereTyRecord r)
+
+  everyWhereTyRecord : RTy -> RTy
+  everyWhereTyRecord TyRecordNil = TyRecordNil
+  everyWhereTyRecord (TyRecordExt l t r) = TyRecordExt l (everyWhereTy t) (everyWhereTyRecord r)
+
+mutual
+  total
+  initialTableRecordWhereProv : {row : RTy} -> String -> (prf : IsBaseRow row) -> Record (interpRTy row) -> Nat -> Record (interpRTy (everyWhereTyRecord row))
+  initialTableRecordWhereProv x EmptyRowIsBase y k = []
+  initialTableRecordWhereProv x (ExtRowIsBase w s) ((label := value) :: rest) k = case w of
+    -- Yes, it's the exact same thing on the right hand side of all of these, but Idris complains otherwise...
+    IntIsBase =>    (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
+    BoolIsBase =>   (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
+    StringIsBase => (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
+
+total
+everyWhere : {ty: Ty} -> (interpTy ty, ATrace ty) -> interpTy (everyWhereTy ty)
+everyWhere {ty = TyInt} (v, t) =    ["data" := v, "row" := (-1), "table" := "fake", "column" := "news"]
+everyWhere {ty = TyBool} (v, t) =   ["data" := v, "row" := (-1), "table" := "fake", "column" := "news"]
+everyWhere {ty = TyString} (v, t) = ["data" := v, "row" := (-1), "table" := "fake", "column" := "news"]
+everyWhere {ty = (TyList (TyRecord row))} (v, t) = case t of
+  TTable n {prf} => mapIndexed (\x => (\i => initialTableRecordWhereProv n prf x i)) v
+  TFor a b => ?everyWhereListFor
+  _ => ?everyWhereList
+everyWhere {ty = (TyFun x y)} (v, t) = ?everyWhere_rhs_6
+everyWhere {ty = (TyRecord x)} (v, t) = ?everyWhere_rhs_7
