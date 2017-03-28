@@ -52,35 +52,34 @@ data IsBaseRow : RTy -> Type where
   EmptyRowIsBase : IsBaseRow TyRecordNil
   ExtRowIsBase : IsBaseType ty -> IsBaseRow row -> IsBaseRow (TyRecordExt _ ty row)
 
-data ATrace : Ty -> Type where
-  -- Probably need an environment too
-  TVar : Nat -> ATrace ty
-  TVal : (interpTy ty) -> ATrace ty
-  TLam : ATrace ty
-  TApp : ATrace (TyFun a b) -> ATrace a -> ATrace b
-  TOp1 : {op : interpTy a -> interpTy b} -> ATrace a -> ATrace b
-  TOp2 : {op : interpTy a -> interpTy b -> interpTy c} -> ATrace a -> ATrace b -> ATrace c
-  TAnd : ATrace TyBool -> ATrace TyBool -> ATrace TyBool
-  TIf : Bool -> ATrace TyBool -> ATrace ty -> ATrace ty
-  TCup : ATrace (TyList ty) -> ATrace (TyList ty) -> ATrace (TyList ty)
-  TFor : ATrace (TyList a) -> List (Nat, ATrace (TyList b)) -> ATrace (TyList b)
-  TSingleton : ATrace ty -> ATrace (TyList ty)
-  TTable : String -> {auto prf : IsBaseRow row} -> ATrace (TyList (TyRecord row))
-  TRecordNil : ATrace (TyRecord TyRecordNil)
-  TRecordExt : (l : String) -> ATrace t -> ATrace (TyRecord row) -> ATrace (TyRecord (TyRecordExt l t row))
-  TProject : (l : String) -> ATrace (TyRecord r) -> { auto prf : TyLabelPresent l r ty } -> ATrace ty
-
-
 -- Convert a proof of label presence for object language records to a proof of label presence for idris records so we can use projection from there
 objToMetaLabelPresenceProof : TyLabelPresent label row ty -> LabelPresent label (interpRTy row) (interpTy ty)
 objToMetaLabelPresenceProof Here = Here
 objToMetaLabelPresenceProof (There prf) = There (objToMetaLabelPresenceProof prf)
 
 using (G: Vect n Ty)
-
   data HasType : (i : Fin n) -> Vect n Ty -> Ty -> Type where
     Stop : HasType FZ (t :: G) t
     Pop : HasType k G t -> HasType (FS k) (u :: G) t
+
+  data ATrace : Ty -> Type where
+    -- Probably need an environment too
+    TVar : HasType i G ty -> ATrace ty
+    TVal : (interpTy ty) -> ATrace ty
+    TLam : ATrace ty
+    TApp : ATrace (TyFun a b) -> ATrace a -> ATrace b
+    TOp1 : {op : interpTy a -> interpTy b} -> ATrace a -> ATrace b
+    TOp2 : {op : interpTy a -> interpTy b -> interpTy c} -> ATrace a -> ATrace b -> ATrace c
+    TAnd : ATrace TyBool -> ATrace TyBool -> ATrace TyBool
+    TIf : Bool -> ATrace TyBool -> ATrace ty -> ATrace ty
+    TCup : ATrace (TyList ty) -> ATrace (TyList ty) -> ATrace (TyList ty)
+    TFor : ATrace (TyList a) -> interpTy (TyList a) -> List (Nat, ATrace (TyList b)) -> ATrace (TyList b)
+    TSingleton : ATrace ty -> interpTy ty -> ATrace (TyList ty)
+    TTable : String -> interpTy (TyList (TyRecord row)) -> {auto prf : IsBaseRow row} -> ATrace (TyList (TyRecord row))
+    TRecordNil : ATrace (TyRecord TyRecordNil)
+    TRecordExt : (l : String) -> ATrace t -> ATrace (TyRecord row) -> ATrace (TyRecord (TyRecordExt l t row))
+    TProject : (l : String) -> ATrace (TyRecord r) -> { auto prf : TyLabelPresent l r ty } -> ATrace ty
+
 
   data Expr : Vect n Ty -> Ty -> Type where
     Var : HasType i G t -> Expr G t
@@ -119,7 +118,7 @@ using (G: Vect n Ty)
 
   total
   teval : Env G -> Expr G t -> (interpTy t, ATrace t)
-  teval env (Var x) = (lookup x env, TVar (hasTypeToNat x))
+  teval env (Var x) = (lookup x env, TVar x)
   teval env (Val x) = (x, TVal x)
   teval env (Lam e) = (\x => fst (teval (x :: env) e), TLam)
   teval env (App f a) =
@@ -153,17 +152,17 @@ using (G: Vect n Ty)
       (vinput, tinput) = teval env input
       res = mapIndexed (\x => \i => (i, teval (x :: env) body)) vinput
       v = concatMap snd3 res
-      t = TFor tinput (map (\p => (fst3 p, thd3 p)) res)
+      t = TFor tinput vinput (map (\p => (fst3 p, thd3 p)) res)
     in (v, t)
   teval env (Singleton x) =
     let (vx, tx) = teval env x
-    in ([ vx ], TSingleton tx)
+    in ([ vx ], TSingleton tx vx)
   -- TTrace is a bit useless, maybe even harmful? We don't really need or want nested `traced` blocks.
   -- Options: - add more type state to Expr, to track whether we are inside a trace block already.
   --          - can we change interpTy (TyTrace t) to avoid nesting
   -- teval env (Trace e) = (teval env e, TTrace)
   -- teval env (Data e) = fst (teval env e)
-  teval env (Table n d) = (d, TTable n)
+  teval env (Table n d) = (d, TTable n d)
   teval env RecordNil = ([], TRecordNil)
   teval env (RecordExt l e rec) =
     let (ve, te) = teval env e
@@ -325,14 +324,22 @@ mutual
     BoolIsBase =>   (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
     StringIsBase => (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
 
+namespace TraceEnv
+  data TraceEnv : Vect n Ty -> Type where
+    Nil : {G: Vect n Ty} -> TraceEnv Nil
+    (::) : {G: Vect n Ty} -> (interpTy a, ATrace a) -> TraceEnv G -> TraceEnv (a :: G)
+
 total
-everyWhere : {ty: Ty} -> (interpTy ty, ATrace ty) -> interpTy (everyWhereTy ty)
-everyWhere {ty = TyInt} (v, t) =    ["data" := v, "row" := (-1), "table" := "fake", "column" := "news"]
-everyWhere {ty = TyBool} (v, t) =   ["data" := v, "row" := (-1), "table" := "fake", "column" := "news"]
-everyWhere {ty = TyString} (v, t) = ["data" := v, "row" := (-1), "table" := "fake", "column" := "news"]
-everyWhere {ty = (TyList (TyRecord row))} (v, t) = case t of
-  TTable n {prf} => mapIndexed (\x => (\i => initialTableRecordWhereProv n prf x i)) v
-  TFor a b => ?everyWhereListFor
-  _ => ?everyWhereList
-everyWhere {ty = (TyFun x y)} (v, t) = ?everyWhere_rhs_6
-everyWhere {ty = (TyRecord x)} (v, t) = ?everyWhere_rhs_7
+everyWhere : {ty: Ty} -> {G: Vect n Ty} -> TraceEnv G -> (interpTy ty, ATrace ty) -> interpTy (everyWhereTy ty)
+everyWhere {ty = ty} env (v, trace) = case trace of
+  TVal c => case ty of
+    TyInt => [ "data" := c, "row" := (-1), "table" := "fake", "column" := "news" ]
+  TSingleton t inV => [ everyWhere env (inV, t) ]
+  TTable n _ {prf} => mapIndexed (\x => (\i => initialTableRecordWhereProv n prf x i)) v
+  TFor inTrace inValues outTraces =>
+    ?ugh -- This is why the PPDP paper has this prefix code business:
+         -- We have n input values, m output values, but there's no relationship between n and m.
+    -- let inWhere = everyWhere env (inValues, inTrace)
+    -- in concat (map (\(rowOutValue, rowInWhere, (rowNumber, rowOutTrace)) =>
+    --        everyWhere ((?vl, ?tr) :: env) (the (List _) [ rowOutValue ], rowOutTrace))
+    --      (zip3 v inWhere outTraces))
