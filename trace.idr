@@ -2,6 +2,8 @@ import Data.Vect
 import Data.Fin
 import Record
 
+%default total
+
 total
 mapIndexed : (a -> Nat -> b) -> List a -> List b
 mapIndexed f l = go l Z
@@ -90,9 +92,10 @@ using (G: Vect en Ty)
     TAnd : ATrace TyBool -> ATrace TyBool -> ATrace TyBool
     TIf : Bool -> ATrace TyBool -> ATrace ty -> ATrace ty
     TCup : ATrace (TyList n ty) -> ATrace (TyList m ty) -> ATrace (TyList (S (maximum n m)) ty)
-    TFor : ATrace (TyList nst a) -> interpTy (TyList nst a) -> List (Vect mst Nat, ATrace (TyList mst b)) -> ATrace (TyList mst b)
+    TFor : ATrace (TyList n a) -> interpTy (TyList n a) -> List (Vect n Nat, ATrace (TyList m b)) -> ATrace (TyList (plus n m) b)
     TSingleton : ATrace ty -> interpTy ty -> ATrace (TyList n ty)
-    TTable : String -> interpTy (TyList 0 (TyRecord row)) -> {auto prf : IsBaseRow row} -> ATrace (TyList 0 (TyRecord row))
+    -- Should these be TyList 0 instead?
+    TTable : String -> interpTy (TyList 1 (TyRecord row)) -> {auto prf : IsBaseRow row} -> ATrace (TyList 1 (TyRecord row))
     TRecordNil : ATrace (TyRecord TyRecordNil)
     TRecordExt : (l : String) -> ATrace t -> ATrace (TyRecord row) -> ATrace (TyRecord (TyRecordExt l t row))
     TProject : (l : String) -> ATrace (TyRecord r) -> { auto prf : TyLabelPresent l r ty } -> ATrace ty
@@ -136,11 +139,6 @@ using (G: Vect en Ty)
   hasTypeToNat (Pop x) = S (hasTypeToNat x)
 
   total
-  consLabel : Nat -> List ((Vect n Nat), t) -> List ((Vect (S n) Nat), t)
-  consLabel l [] = []
-  consLabel l ((ls, v) :: rest) = ((l :: ls), v) :: consLabel l rest
-
-  total
   teval : Env G -> Expr G t -> (interpTy t, ATrace t)
   teval env (Var x) = (lookup x env, TVar x)
   teval env (Val x) = (x, TVal x)
@@ -178,7 +176,8 @@ using (G: Vect en Ty)
     let
       (vinput, tinput) = teval env input
       v = concatMap (\(l, x) => consLabels l (fst (teval (x :: env) body))) vinput
-    in (v, ?t)
+      t = map (\(l, x) => (l, snd (teval (x :: env) body))) vinput
+    in (v, TFor tinput vinput t)
   teval env (Singleton x) =
     let (vx, tx) = teval env x
     in ([ ([], vx) ], TSingleton tx vx)
@@ -187,7 +186,7 @@ using (G: Vect en Ty)
   --          - can we change interpTy (TyTrace t) to avoid nesting
   -- teval env (Trace e) = (teval env e, TTrace)
   -- teval env (Data e) = fst (teval env e)
-  teval env (Table n d) = (mapIndexed (\x => \i => ([i], x)) d, ?tabletrace)
+  teval env (Table n d) = (mapIndexed (\x => \i => ([i], x)) d, TTable n (mapIndexed (\x => \i => ([i], x)) d))
   teval env RecordNil = ([], TRecordNil)
   teval env (RecordExt l e rec) =
     let (ve, te) = teval env e
@@ -234,6 +233,7 @@ using (G: Vect en Ty)
   l34567 : Expr G (TyList 1 TyInt)
   l34567 = For (Singleton (Op2 (+) (Var Stop) one)) l23456
 
+  partial -- mod is not total, or something
   l357 : Expr G (TyList 1 TyInt)
   l357 = For (If (Op2 (\x => \y => mod x 2 == y) (Var Stop) one) (Singleton (Var Stop)) (Val [])) l34567
 
@@ -283,6 +283,19 @@ using (G: Vect en Ty)
                        (the (Expr _ TyString) (Val "boat"))))
       (Singleton (RecordExt "name" (Project "name" (Var Stop)) (RecordExt "phone" (Project "phone" (Var (Pop Stop))) RecordNil)))
       (Val [])) eTours) agencies
+      
+  bigR : Expr G (TyList 1 (TyRecord (TyRecordExt "A" TyInt (TyRecordExt "B" TyInt (TyRecordExt "C" TyInt TyRecordNil)))))
+  bigR = Table "R" [ [ "A" := 1, "B" := 2, "C" := 7 ]
+                   , [ "A" := 2, "B" := 3, "C" := 8 ]
+                   , [ "A" := 4, "B" := 3, "C" := 9 ] ]
+                   
+  bigQ : Expr G (TyList 1 (TyRecord (TyRecordExt "A" TyInt (TyRecordExt "B" TyInt TyRecordNil))))
+  bigQ = For (If (Op2 (the (Int -> Int -> Bool) (==))
+                      (Project "B" (Var Stop)) (the (Expr _ TyInt) (Val 3)))
+                 (Singleton (RecordExt "A" (Project "A" (Var Stop))
+                            (RecordExt "B" (Project "C" (Var Stop))
+                            RecordNil)))
+                 (Val [])) bigR
 
   -- boatToursTracePhone : Expr G (TyList (TyRecord (TyRecordExt "name" TyString (TyRecordExt "phone" TyString (TyRecordExt "phone_trace" (TyTraced TyString) TyRecordNil)))))
   -- boatToursTracePhone =
