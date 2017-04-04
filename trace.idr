@@ -283,6 +283,9 @@ using (G: Vect en Ty)
                        (the (Expr _ TyString) (Val "boat"))))
       (Singleton (RecordExt "name" (Project "name" (Var Stop)) (RecordExt "phone" (Project "phone" (Var (Pop Stop))) RecordNil)))
       (Val [])) eTours) agencies
+  
+  boatToursTrace : (List (Vect 2 Nat, Record [("name", String), ("phone", String)]), ATrace (TyList 2 (TyRecord (TyRecordExt "name" TyString (TyRecordExt "phone" TyString TyRecordNil)))))
+  boatToursTrace = teval [] boatTours
       
   bigR : Expr G (TyList 1 (TyRecord (TyRecordExt "A" TyInt (TyRecordExt "B" TyInt (TyRecordExt "C" TyInt TyRecordNil)))))
   bigR = Table "R" [ [ "A" := 1, "B" := 2, "C" := 7 ]
@@ -364,22 +367,51 @@ mutual
     BoolIsBase =>   (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
     StringIsBase => (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
 
-namespace TraceEnv
-  data TraceEnv : Vect en Ty -> Type where
-    Nil : {G: Vect en Ty} -> TraceEnv Nil
-    (::) : {G: Vect en Ty} -> (interpTy a, ATrace a) -> TraceEnv G -> TraceEnv (a :: G)
 
--- total
--- everyWhere : {ty: Ty} -> {G: Vect n Ty} -> TraceEnv G -> (interpTy ty, ATrace ty) -> interpTy (everyWhereTy ty)
--- everyWhere {ty = ty} env (v, trace) = case trace of
-  -- TVal c => case ty of
-    -- TyInt => [ "data" := c, "row" := (-1), "table" := "fake", "column" := "news" ]
-  -- TSingleton t inV => [ ?everyWhere env (inV, t) ]
-  -- TTable n _ {prf} => ?ttable -- mapIndexed (\x => (\i => initialTableRecordWhereProv n prf x i)) v
-  -- TFor inTrace inValues outTraces =>
-    -- ?ugh -- This is why the PPDP paper has this prefix code business:
-         -- We have n input values, m output values, but there's no relationship between n and m.
-    -- let inWhere = everyWhere env (inValues, inTrace)
-    -- in concat (map (\(rowOutValue, rowInWhere, (rowNumber, rowOutTrace)) =>
-    --        everyWhere ((?vl, ?tr) :: env) (the (List _) [ rowOutValue ], rowOutTrace))
-    --      (zip3 v inWhere outTraces))
+
+partial -- because of the prefix code stuff, we should only call it in a way that works
+getByPrefix : Vect n Nat -> interpTy (TyList n a) -> ATrace (TyList n a) -> (interpTy a, ATrace a)
+getByPrefix xs [] y = ?getByPrefix_rhs_1 -- can't happen, I think
+getByPrefix xs ((l, b) :: ys) y =
+    if xs == l
+    then (b, headOf y)
+    else getByPrefix xs ys (?tailOf y)
+  where
+    headOf : ATrace (TyList n a) -> ATrace a
+    headOf (TVar x) = ?rhs_1 -- Oh, FML!
+    headOf (TVal x) = ?rhs_2
+    headOf TLam = ?rhs_3
+    headOf (TApp x y) = ?rhs_4
+    headOf (TOp1 x) = ?rhs_5
+    headOf (TOp2 y z) = ?rhs_6
+    headOf (TIf x y z) = ?rhs_7
+    headOf (TCup x y) = ?rhs_8
+    headOf (TFor x zs ws) = ?rhs_9
+    headOf (TSingleton x y) = ?rhs_10
+    headOf (TTable x zs) = ?rhs_11
+    headOf (TProject x y) = ?rhs_12
+
+using (G: Vect en Ty)
+  namespace TraceEnv
+    data TraceEnv : Vect en Ty -> Type where
+      Nil  : TraceEnv Nil
+      (::) : (interpTy a, ATrace a) -> TraceEnv G -> TraceEnv (a :: G)
+
+  total
+  everyWhere : {ty : Ty} -> TraceEnv G -> (interpTy ty, ATrace ty) -> interpTy (everyWhereTy ty)
+  everyWhere {ty = ty} env (v, trace) = case trace of
+    TVal c => case ty of
+      TyInt => [ "data" := c, "row" := (-1), "table" := "fake", "column" := "news" ]
+    TSingleton {n=n} t inV => [(replicate n 0, everyWhere env (inV, t))]
+    TTable n _ {prf} => mapIndexed (\x => (\i => ([i], initialTableRecordWhereProv n prf (snd x) i))) v
+    TFor inTrace inValues outTraces => let 
+        inWhere = everyWhere env (inValues, inTrace)
+        -- each = map (\(rowOutValue, rowInWhere, (rowNumber, rowOutTrace)) => ?something)
+        --            (zip3 v inWhere outTraces)
+      -- in concat (map (\((inVl, inVv), inWl, inW) => ?fo) 
+                     -- (zip inValues inWhere))
+      in map (\((nmL, outV), nL, outT) => (nmL, everyWhere (getByPrefix nL inValues inTrace :: env) (outV, ?partofoutT)))
+             (zip v outTraces)
+      -- in concat (map (\(rowOutValue, rowInWhere, (rowNumber, rowOutTrace)) =>
+      --                   everyWhere ((?vl, ?tr) :: env) (the (List _) [ rowOutValue ], rowOutTrace))
+      --                (zip3 v inWhere outTraces))
