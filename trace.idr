@@ -367,51 +367,50 @@ mutual
     BoolIsBase =>   (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
     StringIsBase => (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
 
+total
+findPrefix : Vect n Nat -> List (Vect n Nat, a) -> a
+findPrefix xs [] = ?canthappenimsureofit
+findPrefix xs ((xl, res) :: ys) = if xs == xl then res else findPrefix xs ys
 
+total
+tracePrefix : Vect m Nat -> ATrace (TyList m a) -> ATrace a
+tracePrefix xs (TVar x) = ?tracePrefix_rhs_1
+tracePrefix xs (TVal x) = ?tracePrefix_rhs_2
+tracePrefix xs TLam = ?tracePrefix_rhs_3
+tracePrefix xs (TApp x y) = ?tracePrefix_rhs_4
+tracePrefix xs (TOp1 x) = ?tracePrefix_rhs_5
+tracePrefix xs (TOp2 x y) = ?tracePrefix_rhs_6
+tracePrefix xs (TIf x y z) = ?tracePrefix_rhs_7
+tracePrefix xs (TCup x y) = ?tracePrefix_rhs_8
+tracePrefix xs (TFor x ys zs) = ?tracePrefix_rhs_9
+tracePrefix xs (TSingleton x y) = x
+tracePrefix xs (TTable x ys) = ?tracePrefix_rhs_11
+tracePrefix xs (TProject l x) = ?tracePrefix_rhs_12
 
-partial -- because of the prefix code stuff, we should only call it in a way that works
-getByPrefix : Vect n Nat -> interpTy (TyList n a) -> ATrace (TyList n a) -> (interpTy a, ATrace a)
-getByPrefix xs [] y = ?getByPrefix_rhs_1 -- can't happen, I think
-getByPrefix xs ((l, b) :: ys) y =
-    if xs == l
-    then (b, headOf y)
-    else getByPrefix xs ys (?tailOf y)
-  where
-    headOf : ATrace (TyList n a) -> ATrace a
-    headOf (TVar x) = ?rhs_1 -- Oh, FML!
-    headOf (TVal x) = ?rhs_2
-    headOf TLam = ?rhs_3
-    headOf (TApp x y) = ?rhs_4
-    headOf (TOp1 x) = ?rhs_5
-    headOf (TOp2 y z) = ?rhs_6
-    headOf (TIf x y z) = ?rhs_7
-    headOf (TCup x y) = ?rhs_8
-    headOf (TFor x zs ws) = ?rhs_9
-    headOf (TSingleton x y) = ?rhs_10
-    headOf (TTable x zs) = ?rhs_11
-    headOf (TProject x y) = ?rhs_12
+total
+findTracePrefix : Vect (plus n m) Nat -> List (Vect n Nat, ATrace (TyList m a)) -> ATrace a
+findTracePrefix {n=n} {m=m} nmL tL =
+ let (nL, mL) = splitAt n nmL
+ in tracePrefix mL (findPrefix nL tL)
 
 using (G: Vect en Ty)
-  namespace TraceEnv
-    data TraceEnv : Vect en Ty -> Type where
-      Nil  : TraceEnv Nil
-      (::) : (interpTy a, ATrace a) -> TraceEnv G -> TraceEnv (a :: G)
-
-  total
-  everyWhere : {ty : Ty} -> TraceEnv G -> (interpTy ty, ATrace ty) -> interpTy (everyWhereTy ty)
+  namespace WhereEnv
+    data WhereEnv : Vect en Ty -> Type where
+      Nil  : WhereEnv Nil
+      (::) : interpTy (everyWhereTy a) -> WhereEnv G -> WhereEnv (a :: G)
+  
+  everyWhere : {ty : Ty} -> WhereEnv G -> (interpTy ty, ATrace ty) -> interpTy (everyWhereTy ty)
   everyWhere {ty = ty} env (v, trace) = case trace of
+    TVar var => ?lookup var env -- ugh, how do I tell Idris that we keep environments in sync?
     TVal c => case ty of
       TyInt => [ "data" := c, "row" := (-1), "table" := "fake", "column" := "news" ]
-    TSingleton {n=n} t inV => [(replicate n 0, everyWhere env (inV, t))]
+      _ => ?tval
+    TSingleton {n=n} t inV => [(replicate n 0, everyWhere env (assert_smaller (v, trace) (inV, t)))]
     TTable n _ {prf} => mapIndexed (\x => (\i => ([i], initialTableRecordWhereProv n prf (snd x) i))) v
     TFor inTrace inValues outTraces => let 
-        inWhere = everyWhere env (inValues, inTrace)
-        -- each = map (\(rowOutValue, rowInWhere, (rowNumber, rowOutTrace)) => ?something)
-        --            (zip3 v inWhere outTraces)
-      -- in concat (map (\((inVl, inVv), inWl, inW) => ?fo) 
-                     -- (zip inValues inWhere))
-      in map (\((nmL, outV), nL, outT) => (nmL, everyWhere (getByPrefix nL inValues inTrace :: env) (outV, ?partofoutT)))
+        inWhere = everyWhere env (assert_smaller (v, trace) (inValues, inTrace))
+      in map (\((nmL, outV), nL, outT) =>
+                  (nmL, assert_total everyWhere (findPrefix nL inWhere :: env)
+                                   (outV, findTracePrefix nmL outTraces)))
              (zip v outTraces)
-      -- in concat (map (\(rowOutValue, rowInWhere, (rowNumber, rowOutTrace)) =>
-      --                   everyWhere ((?vl, ?tr) :: env) (the (List _) [ rowOutValue ], rowOutTrace))
-      --                (zip3 v inWhere outTraces))
+    _ => ?whatisit
