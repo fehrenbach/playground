@@ -82,7 +82,6 @@ using (G: Vect en Ty)
     Pop : HasType k G t -> HasType (FS k) (u :: G) t
 
   data ATrace : Vect en Ty -> Ty -> Type where
-    -- Probably need an environment too
     TVar : HasType i G ty -> ATrace G ty
     TVal : (interpTy ty) -> ATrace G ty
     TLam : ATrace G ty
@@ -181,11 +180,6 @@ using (G: Vect en Ty)
   teval env (Singleton x) =
     let (vx, tx) = teval env x
     in ([ ([], vx) ], TSingleton tx vx)
-  -- TTrace is a bit useless, maybe even harmful? We don't really need or want nested `traced` blocks.
-  -- Options: - add more type state to Expr, to track whether we are inside a trace block already.
-  --          - can we change interpTy (TyTrace t) to avoid nesting
-  -- teval env (Trace e) = (teval env e, TTrace)
-  -- teval env (Data e) = fst (teval env e)
   teval env (Table n d) = (mapIndexed (\x => \i => ([i], x)) d, TTable n (mapIndexed (\x => \i => ([i], x)) d))
   teval env RecordNil = ([], TRecordNil)
   teval env (RecordExt l e rec) =
@@ -254,28 +248,52 @@ using (G: Vect en Ty)
   findPrefix xs [] = ?canthappenimsureofit
   findPrefix xs ((xl, res) :: ys) = if xs == xl then res else findPrefix xs ys
   
-  total
-  tracePrefix : Vect m Nat -> ATrace G (TyList m a) -> ATrace G a
-  tracePrefix xs (TVar x) = ?tracePrefix_rhs_1
-  tracePrefix xs (TVal x) = ?tracePrefix_rhs_2
-  tracePrefix xs TLam = ?tracePrefix_rhs_3
-  tracePrefix xs (TApp x y) = ?tracePrefix_rhs_4
-  tracePrefix xs (TOp1 x) = ?tracePrefix_rhs_5
-  tracePrefix xs (TOp2 x y) = ?tracePrefix_rhs_6
-  tracePrefix xs (TIf x y z) = ?tracePrefix_rhs_7
-  tracePrefix xs (TCup x y) = ?tracePrefix_rhs_8
-  tracePrefix xs (TFor x ys zs) = ?tracePrefix_rhs_9
-  tracePrefix xs (TSingleton x y) = x
-  tracePrefix xs (TTable x ys) = ?tracePrefix_rhs_11
-  tracePrefix xs (TProject l x) = ?tracePrefix_rhs_12
+  -- -- reduced version of findTracePrefix
+  -- -- Now we need to find the "address" in a trace of a list type
+  -- total
+  -- tracePrefix : Vect l Nat -> ATrace G (TyList l t) -> ATrace G t
+  -- tracePrefix xs (TVar x) = ?tracePrefix_rhs_1
+  -- tracePrefix xs (TVal x) = ?tracePrefix_rhs_2
+  -- tracePrefix xs TLam = ?tracePrefix_rhs_3
+  -- tracePrefix xs (TApp x y) = ?tracePrefix_rhs_4
+  -- tracePrefix xs (TOp1 x) = ?tracePrefix_rhs_5
+  -- tracePrefix xs (TOp2 x y) = ?tracePrefix_rhs_6
+  -- tracePrefix xs (TIf x y z) = ?tracePrefix_rhs_7
+  -- tracePrefix xs (TCup x y) = ?tracePrefix_rhs_8
+  -- tracePrefix nmL (TFor {n=n} nt nv nmts) =
+  --   let (nL, mL) = splitAt n nmL
+  --   in ?tracePrefix_rhs_9 --huh, nmts has type  List (Vect n Nat, ATrace (a :: G) (TyList m t)) but we need ATrace G t. I'm pretty sure I'm doing recursion wrong somewhere..
+  -- tracePrefix xs (TSingleton x y) = x
+  -- tracePrefix xs (TTable x ys) = ?tracePrefix_rhs_11
+  -- tracePrefix xs (TProject l x) = ?tracePrefix_rhs_12
   
-  total
-  findTracePrefix : Vect (plus n m) Nat -> List (Vect n Nat, ATrace G (TyList m a)) -> ATrace G a
-  findTracePrefix {n=n} {m=m} nmL tL =
-   let (nL, mL) = splitAt n nmL
-   in tracePrefix mL (findPrefix nL tL)
+  -- -- Given the "address" of an element of the output, and a list of output traces,
+  -- -- find the trace of the actual addressed output element
+  -- total
+  -- findTracePrefix : Vect (plus n m) Nat -> List (Vect n Nat, ATrace G (TyList m a)) -> ATrace G a
+  -- findTracePrefix {n=n} {m=m} nmL tL =
+  --  let (nL, mL) = splitAt n nmL
+  --  in tracePrefix mL (findPrefix nL tL)
 
--- using (G: Vect en Ty)
+  total
+  findTraceElement : Vect m Nat -> ATrace G (TyList m b) -> ATrace G b
+  -- findTraceElement mL (TVar x) = ?findTraceElement_rhs_1
+  -- findTraceElement mL (TVal x) = ?findTraceElement_rhs_2
+  -- findTraceElement mL TLam = ?findTraceElement_rhs_3
+  -- findTraceElement mL (TApp x y) = ?findTraceElement_rhs_4
+  -- findTraceElement mL (TOp1 x) = ?findTraceElement_rhs_5
+  -- findTraceElement mL (TOp2 x y) = ?findTraceElement_rhs_6
+  -- findTraceElement mL (TIf x y z) = ?findTraceElement_rhs_7
+  -- findTraceElement mL (TCup x y) = ?findTraceElement_rhs_8
+  findTraceElement nmL (TFor {n=n} x xs ys) =
+    let (nL, mL) = splitAt n nmL
+        foo = findPrefix nL ys
+    in findTraceElement mL ?notQuiteFoo -- this is essentially the same problem as before, right?
+  findTraceElement mL (TSingleton x y) = x
+  -- findTraceElement mL (TTable x xs) = ?findTraceElement_rhs_11
+  -- findTraceElement mL (TProject l x) = ?findTraceElement_rhs_12
+  findTraceElement ml _ = ?todoThisIsJustToHaveLessHoles
+
   namespace WhereEnv
     data WhereEnv : Vect en Ty -> Type where
       Nil  : WhereEnv Nil
@@ -294,11 +312,12 @@ using (G: Vect en Ty)
       _ => ?tval
     TSingleton {n=n} t inV => [(replicate n 0, everyWhere env (assert_smaller (v, trace) (inV, t)))]
     TTable n _ {prf} => mapIndexed (\x => (\i => ([i], initialTableRecordWhereProv n prf (snd x) i))) v
-    TFor inTrace inValues outTraces => let 
+    TFor {n=n} inTrace inValues outTraces => let 
         inWhere = everyWhere env (assert_smaller (v, trace) (inValues, inTrace))
       in map (\((nmL, outV), nL, outT) =>
-                  (nmL, assert_total everyWhere (findPrefix nL inWhere :: env)
-                                   (outV, findTracePrefix nmL outTraces)))
+                 let (_, mL) = splitAt n nmL
+                 in (nmL, assert_total everyWhere (findPrefix nL inWhere :: env)
+                                                  (outV, findTraceElement mL outT)))
              (zip v outTraces)
     _ => ?whatisit
 
