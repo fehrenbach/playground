@@ -104,13 +104,20 @@ using (G: Vect en Ty)
     TTable n _ {prf} => mapIndexed (\x => (\i => ([i], initialTableRecordWhereProv n prf (snd x) i))) v
     TFor {n=n} {m=m} {b=b} inTrace inValues outTraces => let 
         inWhere = everyWhere env (assert_smaller (v, trace) (inValues, inTrace))
-      in map (\((nmL, outV), nL, outT) =>
-                 let (_, mL) = splitAt n nmL
+      in map (\(nmL, outV) =>
+                 let (nL, mL) = splitAt n nmL
+                     outT = findPrefix nL outTraces
                  in (nmL, unsingleton {-mL-} (everyWhere (findPrefix nL inWhere :: env)
                                                   (assert_smaller (v, trace)
                                                     (the (interpTy (TyList m b)) [(mL, outV)], outT)))))
-             (zip v outTraces)
+             v
     TIf x y z => everyWhere env (assert_smaller (v, trace) (v, z))
+    TAnd x y => ?tand
+    TOp2 a b => ?top2
+    TProject l t v {prf=prf} => everyWhere env (assert_smaller (v, trace) (project' l v (objToMetaLabelPresenceProof prf),
+                                                                           ?ohnothisisthewholeprefixcodethingalloveragainexceptforrecordsfml))
+    TRecordNil => []
+    TRecordExt l xt xv rt rv => (l := everyWhere env (assert_smaller (v, trace) (xv, xt))) :: everyWhere env (assert_smaller (v, trace) (rv, rt))
     _ => ?whatisit
 
 -- W(env, Values, U{ _ | x <- T} > Theta) =
@@ -133,3 +140,5 @@ using (G: Vect en Ty)
 -- Or maybe that cannot happen, we iterate over the output after all...
 
 -- Huh, no, when I filter, its empty...
+
+-- I'm such an idiot. Zipping lists of different lengths...

@@ -63,11 +63,14 @@ using (G: Vect en Ty)
     TRecordExt
        : (l : String)
       -> ATrace G t
+      -> interpTy t
       -> ATrace G (TyRecord row)
+      -> interpTy (TyRecord row)
       -> ATrace G (TyRecord (TyRecordExt l t row))
     TProject
        : (l : String)
       -> ATrace G (TyRecord r)
+      -> interpTy (TyRecord r)
       -> { auto prf : TyLabelPresent l r ty }
       -> ATrace G ty
 
@@ -119,10 +122,10 @@ using (G: Vect en Ty)
   teval env (RecordExt l e rec) =
     let (ve, te) = teval env e
         (vr, tr) = teval env rec
-    in ((l := ve) :: vr, TRecordExt l te tr)
+    in ((l := ve) :: vr, TRecordExt l te ve tr vr)
   teval env (Project l r { prf }) =
     let (vr, tr) = teval env r
-    in (project' l vr (objToMetaLabelPresenceProof prf), TProject l tr)
+    in (project' l vr (objToMetaLabelPresenceProof prf), TProject l tr vr)
 
 
   -- boatToursTrace : (List (Vect 2 Nat, Record [("name", String), ("phone", String)]), ATrace [] (TyList 2 (TyRecord (TyRecordExt "name" TyString (TyRecordExt "phone" TyString TyRecordNil)))))
