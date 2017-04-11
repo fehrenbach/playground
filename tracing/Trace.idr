@@ -10,21 +10,66 @@ import Expr
 
 using (G: Vect en Ty)
   data ATrace : Vect en Ty -> Ty -> Type where
-    TVar : HasType i G ty -> ATrace G ty
-    TVal : (interpTy ty) -> ATrace G ty
-    TLam : ATrace G ty
-    TApp : ATrace G (TyFun a b) -> ATrace G a -> ATrace G b
-    TOp1 : {op : interpTy a -> interpTy b} -> ATrace G a -> ATrace G b
-    TOp2 : {op : interpTy a -> interpTy b -> interpTy c} -> ATrace G a -> ATrace G b -> ATrace G c
-    TAnd : ATrace G TyBool -> ATrace G TyBool -> ATrace G TyBool
-    TIf : Bool -> ATrace G TyBool -> ATrace G ty -> ATrace G ty
-    TCup : ATrace G (TyList n ty) -> ATrace G (TyList m ty) -> ATrace G (TyList (S (maximum n m)) ty)
-    TFor : ATrace G (TyList n a) -> interpTy (TyList n a) -> List (Vect n Nat, ATrace (a :: G) (TyList m b)) -> ATrace G (TyList (plus n m) b)
-    TSingleton : ATrace G ty -> interpTy ty -> ATrace G (TyList n ty)
-    TTable : String -> interpTy (TyList 1 (TyRecord row)) -> {auto prf : IsBaseRow row} -> ATrace G (TyList 1 (TyRecord row))
-    TRecordNil : ATrace G (TyRecord TyRecordNil)
-    TRecordExt : (l : String) -> ATrace G t -> ATrace G (TyRecord row) -> ATrace G (TyRecord (TyRecordExt l t row))
-    TProject : (l : String) -> ATrace G (TyRecord r) -> { auto prf : TyLabelPresent l r ty } -> ATrace G ty
+    TVar
+       : HasType i G ty
+      -> ATrace G ty
+    TVal
+       : (interpTy ty)
+      -> ATrace G ty
+    TLam
+       : ATrace G ty
+    TApp
+       : ATrace G (TyFun a b)
+      -> ATrace G a
+      -> ATrace G b
+    TOp1
+       : {op : interpTy a -> interpTy b}
+      -> ATrace G a
+      -> ATrace G b
+    TOp2
+       : {op : interpTy a -> interpTy b -> interpTy c}
+      -> ATrace G a
+      -> ATrace G b
+      -> ATrace G c
+    TAnd
+       : ATrace G TyBool
+      -> ATrace G TyBool
+      -> ATrace G TyBool
+    TIf
+       : Bool
+      -> ATrace G TyBool
+      -> ATrace G ty
+      -> ATrace G ty
+    TCup
+       : ATrace G (TyList n ty)
+      -> ATrace G (TyList m ty)
+      -> ATrace G (TyList (S (maximum n m)) ty)
+    TFor
+       : ATrace G (TyList n a)
+      -> interpTy (TyList n a)
+      -> List (Vect n Nat, ATrace (a :: G) (TyList m b))
+      -> ATrace G (TyList (plus n m) b)
+    TSingleton
+       : ATrace G ty
+      -> interpTy ty
+      -> ATrace G (TyList n ty)
+    TTable
+       : String
+      -> interpTy (TyList 1 (TyRecord row))
+      -> {auto prf : IsBaseRow row}
+      -> ATrace G (TyList 1 (TyRecord row))
+    TRecordNil
+       : ATrace G (TyRecord TyRecordNil)
+    TRecordExt
+       : (l : String)
+      -> ATrace G t
+      -> ATrace G (TyRecord row)
+      -> ATrace G (TyRecord (TyRecordExt l t row))
+    TProject
+       : (l : String)
+      -> ATrace G (TyRecord r)
+      -> { auto prf : TyLabelPresent l r ty }
+      -> ATrace G ty
 
   total
   teval : Env G -> Expr G t -> (interpTy t, ATrace G t)
@@ -80,6 +125,5 @@ using (G: Vect en Ty)
     in (project' l vr (objToMetaLabelPresenceProof prf), TProject l tr)
 
 
-  boatToursTrace : (List (Vect 2 Nat, Record [("name", String), ("phone", String)]), ATrace [] (TyList 2 (TyRecord (TyRecordExt "name" TyString (TyRecordExt "phone" TyString TyRecordNil)))))
-  boatToursTrace = teval [] boatTours
-
+  -- boatToursTrace : (List (Vect 2 Nat, Record [("name", String), ("phone", String)]), ATrace [] (TyList 2 (TyRecord (TyRecordExt "name" TyString (TyRecordExt "phone" TyString TyRecordNil)))))
+  -- boatToursTrace = teval [] boatTours

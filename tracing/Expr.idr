@@ -65,28 +65,70 @@ using (G: Vect en Ty)
     Pop : HasType k G t -> HasType (FS k) (u :: G) t
 
   data Expr : Vect en Ty -> Ty -> Type where
-    Var : HasType i G t -> Expr G t
-    Val : interpTy t -> Expr G t
-    Lam : Expr (a :: G) t -> Expr G (TyFun a t)
-    App : Expr G (TyFun a t) -> Expr G a -> Expr G t
-    (&&) : Expr G TyBool -> Expr G TyBool -> Expr G TyBool
+    Var
+       : HasType i G t
+      -> Expr G t
+    Val
+       : interpTy t
+      -> Expr G t
+    Lam
+       : Expr (a :: G) t
+      -> Expr G (TyFun a t)
+    App
+       : Expr G (TyFun a t)
+      -> Expr G a
+      -> Expr G t
+    (&&)
+       : Expr G TyBool
+      -> Expr G TyBool
+      -> Expr G TyBool
     -- Equality is hard... Just eval x == eval y complains about no instance of Eq for (interpTy ty)
     -- One reason could be: ty could be TyFun, in which case interpTy ty is (a -> b) and function equality is notoriously hard...
     -- It's probably possible to constrain t to equatable types somehow. For now, just use Op2 with (==) (which unfortunately needs to be ascribed with the correct type :/)
     -- (==) : Expr G ty -> Expr G ty -> Expr G TyBool
-    Op1 : (interpTy a -> interpTy b) -> Expr G a -> Expr G b
-    Op2 : (interpTy a -> interpTy b -> interpTy c) -> Expr G a -> Expr G b -> Expr G c
-    If  : Expr G TyBool -> Lazy (Expr G a) -> Lazy (Expr G a) -> Expr G a
-    Cup : {n, m : Nat}
-       -> Expr G (TyList n a) -> {s : Nat} -> { auto sprf : plus n s = maximum n m }
-       -> Expr G (TyList m a) -> {t : Nat} -> { auto tprf : plus m t = maximum n m }
-       -> Expr G (TyList (S (maximum n m)) a)
-    For : Expr (a :: G) (TyList m b) -> Expr G (TyList n a) -> Expr G (TyList (plus n m) b)
-    Singleton : Expr G t -> Expr G (TyList 0 t)
-    Table : String -> List (interpTy (TyRecord row)) -> { auto prf : IsBaseRow row } -> Expr G (TyList 1 (TyRecord row))
-    RecordNil : Expr G (TyRecord TyRecordNil)
-    RecordExt : (l : String) -> Expr G t -> Expr G (TyRecord row) -> Expr G (TyRecord (TyRecordExt l t row))
-    Project : (l : String) -> Expr G (TyRecord row) -> { auto prf : TyLabelPresent l row ty } -> Expr G ty
+    Op1
+       : (interpTy a -> interpTy b)
+      -> Expr G a
+      -> Expr G b
+    Op2
+       : (interpTy a -> interpTy b -> interpTy c)
+      -> Expr G a
+      -> Expr G b
+      -> Expr G c
+    If
+       : Expr G TyBool
+      -> Lazy (Expr G a)
+      -> Lazy (Expr G a)
+      -> Expr G a
+    Cup
+       : {n, m : Nat}
+      -> Expr G (TyList n a) -> {s : Nat} -> { auto sprf : plus n s = maximum n m }
+      -> Expr G (TyList m a) -> {t : Nat} -> { auto tprf : plus m t = maximum n m }
+      -> Expr G (TyList (S (maximum n m)) a)
+    For
+       : Expr (a :: G) (TyList m b)
+      -> Expr G (TyList n a)
+      -> Expr G (TyList (plus n m) b)
+    Singleton
+       : Expr G t
+      -> Expr G (TyList 0 t)
+    Table
+       : String
+      -> List (interpTy (TyRecord row))
+      -> { auto prf : IsBaseRow row }
+      -> Expr G (TyList 1 (TyRecord row))
+    RecordNil
+       : Expr G (TyRecord TyRecordNil)
+    RecordExt
+       : (l : String)
+      -> Expr G t
+      -> Expr G (TyRecord row)
+      -> Expr G (TyRecord (TyRecordExt l t row))
+    Project
+       : (l : String)
+      -> Expr G (TyRecord row)
+      -> { auto prf : TyLabelPresent l row ty }
+      -> Expr G ty
 
   namespace Env
     data Env : Vect n Ty -> Type where
@@ -166,7 +208,7 @@ using (G: Vect en Ty)
 
   a2bTruePa : Expr G TyInt
   a2bTruePa = Project "a" a2bTrue
-  
+
   agencies : Expr G (TyList 1 (TyRecord (TyRecordExt "name" TyString (TyRecordExt "based_in" TyString (TyRecordExt "phone" TyString TyRecordNil)))))
   agencies = Table "agencies"
     [ [ "name" := "EdinTours", "based_in" := "Edinburgh", "phone" := "412 1200" ],
@@ -191,12 +233,12 @@ using (G: Vect en Ty)
                        (the (Expr _ TyString) (Val "boat"))))
       (Singleton (RecordExt "name" (Project "name" (Var Stop)) (RecordExt "phone" (Project "phone" (Var (Pop Stop))) RecordNil)))
       (Val [])) eTours) agencies
-  
+
   bigR : Expr G (TyList 1 (TyRecord (TyRecordExt "A" TyInt (TyRecordExt "B" TyInt (TyRecordExt "C" TyInt TyRecordNil)))))
   bigR = Table "R" [ [ "A" := 1, "B" := 2, "C" := 7 ]
                    , [ "A" := 2, "B" := 3, "C" := 8 ]
                    , [ "A" := 4, "B" := 3, "C" := 9 ] ]
-                   
+
   bigQ : Expr G (TyList 1 (TyRecord (TyRecordExt "A" TyInt (TyRecordExt "B" TyInt TyRecordNil))))
   bigQ = For (If (Op2 (the (Int -> Int -> Bool) (==))
                       (Project "B" (Var Stop)) (the (Expr _ TyInt) (Val 3)))
