@@ -27,6 +27,7 @@ mutual
   everyWhereTy (TyFun x y) = TyFun (everyWhereTy x) (everyWhereTy y)
   everyWhereTy (TyRecord r) = TyRecord (everyWhereTyRecord r)
 
+  total
   everyWhereTyRecord : RTy -> RTy
   everyWhereTyRecord TyRecordNil = TyRecordNil
   everyWhereTyRecord (TyRecordExt l t r) = TyRecordExt l (everyWhereTy t) (everyWhereTyRecord r)
@@ -96,6 +97,11 @@ using (G: Vect en Ty)
   addFakeProv (TyRecord y) x = ?addFakeProv_rhs_7
 
   total
+  projectW : interpTy (everyWhereTy (TyRecord r)) -> (l : String) -> TyLabelPresent l r ty -> interpTy (everyWhereTy ty)
+  projectW ((_ := x) :: y) l Here = x
+  projectW (x :: y) l (There w) = projectW y l w
+
+  total
   everyWhere : {ty : Ty} -> WhereEnv G -> (interpTy ty, ATrace G ty) -> interpTy (everyWhereTy ty)
   everyWhere {ty = ty} env (v, trace) = case trace of
     TVar var => lookup var env
@@ -114,31 +120,8 @@ using (G: Vect en Ty)
     TIf x y z => everyWhere env (assert_smaller (v, trace) (v, z))
     TAnd x y => ?tand
     TOp2 a b => ?top2
-    TProject l t v {prf=prf} => everyWhere env (assert_smaller (v, trace) (project' l v (objToMetaLabelPresenceProof prf),
-                                                                           ?ohnothisisthewholeprefixcodethingalloveragainexceptforrecordsfml))
+    TProject l t v {prf=prf} => case everyWhere env (assert_smaller (v, trace) (v, t)) of
+      r => projectW r l prf
     TRecordNil => []
     TRecordExt l xt xv rt rv => (l := everyWhere env (assert_smaller (v, trace) (xv, xt))) :: everyWhere env (assert_smaller (v, trace) (rv, rt))
     _ => ?whatisit
-
--- W(env, Values, U{ _ | x <- T} > Theta) =
---  [ lnm, unsingleton W(whereIn :: env, outV, theta)
---       where whereIn = compute where-prov of input, find the one that matches the ln prefix of lnm
---  | lnm, outV > theta <- Values `zip` Theta ]
-
--- the types don't quite add up: theta is a trace of the body, which has list type,
--- but outV is one value out of the list of results, so it is of the element type
--- Before I tried to extract the element trace, which failed
--- maybe wrapping in a singleton is the right thing to do?
--- shouldn't matter for where-prov...
-
--- Okay, I think I figured out the problem with unsingleton:
--- In the recursive call, we produce where-provenance for all the elements.
--- That is, if the body is ({x} u {x}) we produce [[data=x,...], [data=x,...]]
--- Possible solutions: - only produce the one we care about
---                     - make unsingleton select the one we care about
--- Further problem: what if we don't produce an element at all?
--- Or maybe that cannot happen, we iterate over the output after all...
-
--- Huh, no, when I filter, its empty...
-
--- I'm such an idiot. Zipping lists of different lengths...
