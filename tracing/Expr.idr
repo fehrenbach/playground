@@ -141,18 +141,12 @@ using (G: Vect en Ty)
     lookup (Pop x) (y :: z) = lookup x z
 
   total
-  hasTypeToNat : HasType i G t -> Nat
-  hasTypeToNat Stop = Z
-  hasTypeToNat (Pop x) = S (hasTypeToNat x)
-
-  total
   eval : Env G -> Expr G t -> interpTy t
   eval env (Var x) = lookup x env
   eval env (Val v) = v
   eval env (Lam body) = \x => eval (x :: env) body
   eval env (App f e) = eval env f (eval env e)
   eval env ((&&) x y) = eval env x && eval env y
-  -- eval env ((==) x y) = valueEq (eval env x) (eval env y)
   eval env (Op1 f x) = f (eval env x)
   eval env (Op2 op x y) = op (eval env x) (eval env y)
   eval env (If x y z) = if eval env x then eval env y else eval env z

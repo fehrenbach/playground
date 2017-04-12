@@ -9,7 +9,7 @@ import Trace
 %access public export
 
 %default total
-      
+
 total
 whereTy : Ty -> Ty
 whereTy t = TyRecord (TyRecordExt "data" t
@@ -31,7 +31,7 @@ mutual
   everyWhereTyRecord : RTy -> RTy
   everyWhereTyRecord TyRecordNil = TyRecordNil
   everyWhereTyRecord (TyRecordExt l t r) = TyRecordExt l (everyWhereTy t) (everyWhereTyRecord r)
-  
+
 mutual
   total
   initialTableRecordWhereProv : {row : RTy} -> String -> (prf : IsBaseRow row) -> Record (interpRTy row) -> Nat -> Record (interpRTy (everyWhereTyRecord row))
@@ -42,7 +42,7 @@ mutual
     BoolIsBase =>   (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
     StringIsBase => (label := [ "data" := value, "row" := cast k, "table" := x, "column" := label]) :: initialTableRecordWhereProv x s rest k
 
-total
+total -- This is a lie. It's not total, but seems easier than dealing with partiality at every call site
 findPrefix : Vect n Nat -> List (Vect n Nat, a) -> a
 findPrefix xs [] = ?canthappenimsureofit
 findPrefix xs ((xl, res) :: ys) = if xs == xl then res else findPrefix xs ys
@@ -52,17 +52,11 @@ using (G: Vect en Ty)
     data WhereEnv : Vect en Ty -> Type where
       Nil  : WhereEnv Nil
       (::) : interpTy (everyWhereTy a) -> WhereEnv G -> WhereEnv (a :: G)
-  
+
     total
     lookup : HasType i G t -> WhereEnv G -> interpTy (everyWhereTy t)
     lookup Stop (x :: _) = x
     lookup (Pop x) (_ :: y) = lookup x y
-    
-  total
-  unsingleton : interpTy (everyWhereTy (TyList m b)) -> interpTy (everyWhereTy b)
-  unsingleton [] = ?emptyshouldnothappen
-  unsingleton [(l,x)] = x
-  unsingleton _ = ?soetnuhaseu
 
   total
   addFakeProv : (t: Ty) -> interpTy t -> interpTy (everyWhereTy t)
@@ -92,8 +86,10 @@ using (G: Vect en Ty)
             outWS    = everyWhere (findPrefix nL inWhere :: env)
                                   (the (interpTy (TyList m b)) [(mL, outV)])
                                   (assert_smaller (TFor inTrace inValues outTraces) outT)
-        in (nmL, unsingleton outWS)
-    in map f v
+            -- We know outWS will be a singleton list, because of the prefix code business,
+            -- but we can avoid using the non-total `unsingleton : List a -> a`
+        in map (\(_, outW) => (nmL, outW)) outWS
+    in concat (map f v)
   everyWhere env v (TSingleton {n} t inV) =
     [(replicate n 0, everyWhere env inV t)]
   everyWhere env v (TTable name _ {prf}) =
@@ -110,6 +106,7 @@ using (G: Vect en Ty)
   -- everyWhere env v (TOp2 x y) = ?everyWhere_rhs_6
   -- everyWhere env v (TAnd x y) = ?everyWhere_rhs_7
   -- everyWhere env v (TCup x y) = ?everyWhere_rhs_9
+
 
   total
   whereProv : Expr [] t -> interpTy (everyWhereTy t)

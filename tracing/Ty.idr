@@ -4,7 +4,9 @@ module Ty
 %default total
 
 mutual
-  data Ty = TyInt | TyBool | TyString | TyList Nat Ty | TyFun Ty Ty
+  data Ty = TyInt | TyBool | TyString
+          | TyList Nat Ty
+          | TyFun Ty Ty
           | TyRecord RTy
   data RTy = TyRecordNil | TyRecordExt String Ty RTy
 
