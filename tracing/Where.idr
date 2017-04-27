@@ -76,7 +76,7 @@ using (G: Vect en Ty)
   everyWhere : {ty: Ty} -> WhereEnv G -> interpTy ty -> ATrace G ty -> interpTy (everyWhereTy ty)
   everyWhere env v (TVar var) = lookup var env
   everyWhere {ty} env v (TVal x) = addFakeProv ty x
-  everyWhere env v (TIf x y z) = everyWhere env v z
+  everyWhere env v (TIf cv ct pt) = everyWhere env v pt
   everyWhere env v (TFor {n} {m} {b} inTrace inValues outTraces) =
     let
       inWhere = everyWhere env inValues inTrace
