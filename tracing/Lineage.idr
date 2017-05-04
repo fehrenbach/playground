@@ -45,6 +45,12 @@ mutual
   addEmptyProvenanceRecord {r = TyRecordNil} [] = []
   addEmptyProvenanceRecord {r = (TyRecordExt x y z)} ((x := w) :: s) = (x := addEmptyProvenance w) :: addEmptyProvenanceRecord s
 
+total
+projectL : interpTy (everyLinTy (TyRecord r)) -> (l : String) -> TyLabelPresent l r ty -> interpTy (everyLinTy ty)
+projectL ((_ := x) :: y) l Here = x
+projectL (x :: y) l (There w) = projectL y l w
+
+
 using (G: Vect en Ty)
   namespace LinEnv
     data LinEnv : Vect en Ty -> Type where
@@ -69,15 +75,17 @@ using (G: Vect en Ty)
        f = \(ln, r) => let
            relatedOutTraces = filter (\(l, _) => l == ln) outTraces
          in concat (map (\(_, t) => map (\(lm, rb) => (ln ++ lm, [ "data" := rb . "data"
-                                                                 , "prov" := rb . "prov" ++ r . "prov" ])) 
+                                                                 , "prov" := rb . "prov" ++ r . "prov" ]))
                                         (everyLin (r . "data" :: env) (assert_smaller (TFor inTrace inValues outTraces) t)))
                         relatedOutTraces)
    in concat (map f inLin)
-  everyLin env (TIf x y z) = everyLin env z
-  everyLin env (TSingleton x y) = [([], ["data" := everyLin env x, "prov" := []])]
-  everyLin env TRecordNil = ?rhs_13
-  everyLin env (TRecordExt l x y z w) = ?rhs_14
-  everyLin env (TProject l x y) = ?rhs_15
+  everyLin env (TIf _ _ z) = everyLin env z
+  everyLin env (TSingleton x _) = [([], ["data" := everyLin env x, "prov" := []])]
+  everyLin env TRecordNil = []
+  everyLin env (TRecordExt l xt _ rt _) =
+    (l := everyLin env xt) :: everyLin env rt
+  everyLin env (TProject l x _ {prf}) =
+    projectL (everyLin env x) l prf
   everyLin env TLam = ?rhs_3
   everyLin env (TApp x y) = ?rhs_4
   everyLin env (TOp1 x) = ?rhs_5
