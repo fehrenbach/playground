@@ -52,7 +52,7 @@ using (G: Vect en Ty)
     TSingleton
        : ATrace G ty
       -> interpTy ty
-      -> ATrace G (TyList n ty)
+      -> ATrace G (TyList 0 ty)
     TTable
        : String
       -> interpTy (TyList 1 (TyRecord row))

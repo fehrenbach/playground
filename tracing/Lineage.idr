@@ -64,18 +64,23 @@ using (G: Vect en Ty)
     map (\(l, v) => (l, [ "data" := addEmptyProvenanceRecord v,
                           "prov" := [ ([], [ "table" := name, "row" := cast (head l) ]) ]]))
         values
-  everyLin env (TFor inTrace inValues outTraces) =
+  everyLin env (TFor {n} {m} {b} inTrace inValues outTraces) =
    let inLin = everyLin env inTrace
-       f = \(ln, r) => ?listOfAnnotatedMStuff
+       f = \(ln, r) => let
+           relatedOutTraces = filter (\(l, _) => l == ln) outTraces
+         in concat (map (\(_, t) => map (\(lm, rb) => (ln ++ lm, [ "data" := rb . "data"
+                                                                 , "prov" := rb . "prov" ++ r . "prov" ])) 
+                                        (everyLin (r . "data" :: env) (assert_smaller (TFor inTrace inValues outTraces) t)))
+                        relatedOutTraces)
    in concat (map f inLin)
+  everyLin env (TIf x y z) = everyLin env z
+  everyLin env (TSingleton x y) = [([], ["data" := everyLin env x, "prov" := []])]
+  everyLin env TRecordNil = ?rhs_13
+  everyLin env (TRecordExt l x y z w) = ?rhs_14
+  everyLin env (TProject l x y) = ?rhs_15
   everyLin env TLam = ?rhs_3
   everyLin env (TApp x y) = ?rhs_4
   everyLin env (TOp1 x) = ?rhs_5
   everyLin env (TOp2 x y) = ?rhs_6
   everyLin env (TAnd x y) = ?rhs_7
-  everyLin env (TIf x y z) = ?rhs_8
   everyLin env (TCup x y) = ?rhs_9
-  everyLin env (TSingleton x y) = ?rhs_11
-  everyLin env TRecordNil = ?rhs_13
-  everyLin env (TRecordExt l x y z w) = ?rhs_14
-  everyLin env (TProject l x y) = ?rhs_15
