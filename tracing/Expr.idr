@@ -82,10 +82,11 @@ using (G: Vect en Ty)
        : Expr G TyBool
       -> Expr G TyBool
       -> Expr G TyBool
-    -- Equality is hard... Just eval x == eval y complains about no instance of Eq for (interpTy ty)
-    -- One reason could be: ty could be TyFun, in which case interpTy ty is (a -> b) and function equality is notoriously hard...
-    -- It's probably possible to constrain t to equatable types somehow. For now, just use Op2 with (==) (which unfortunately needs to be ascribed with the correct type :/)
-    -- (==) : Expr G ty -> Expr G ty -> Expr G TyBool
+    (==)
+       : Eq (interpTy a)
+      => Expr G a
+      -> Expr G a
+      -> Expr G TyBool
     Op1
        : (interpTy a -> interpTy b)
       -> Expr G a
@@ -147,6 +148,7 @@ using (G: Vect en Ty)
   eval env (Lam body) = \x => eval (x :: env) body
   eval env (App f e) = eval env f (eval env e)
   eval env ((&&) x y) = eval env x && eval env y
+  eval env ((==) x y) = eval env x == eval env y
   eval env (Op1 f x) = f (eval env x)
   eval env (Op2 op x y) = op (eval env x) (eval env y)
   eval env (If x y z) = if eval env x then eval env y else eval env z
@@ -219,12 +221,10 @@ using (G: Vect en Ty)
 
   boatTours : Expr G (TyList 2 (TyRecord (TyRecordExt "name" TyString (TyRecordExt "phone" TyString TyRecordNil))))
   boatTours =
-    For (For (If ((Op2 (the (interpTy TyString -> interpTy TyString -> Bool) (==))
-                       (the (Expr _ TyString) (Project "name" (Var (Pop Stop))))
-                       (the (Expr _ TyString) (Project "name" (Var Stop))))
-                  && (Op2 (the (interpTy TyString -> interpTy TyString -> Bool) (==))
-                       (the (Expr _ TyString) (Project "type" (Var Stop)))
-                       (the (Expr _ TyString) (Val "boat"))))
+    For (For (If ((the (Expr _ TyString) (Project "name" (Var (Pop Stop)))) ==
+                       (the (Expr _ TyString) (Project "name" (Var Stop)))
+                  && ((the (Expr _ TyString) (Project "type" (Var Stop)))
+                     == (the (Expr _ TyString) (Val "boat"))))
       (Singleton (RecordExt "name" (Project "name" (Var Stop)) (RecordExt "phone" (Project "phone" (Var (Pop Stop))) RecordNil)))
       (Val [])) eTours) agencies
 

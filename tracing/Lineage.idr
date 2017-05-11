@@ -92,3 +92,4 @@ using (G: Vect en Ty)
   everyLin env (TOp2 x y) = ?rhs_6
   everyLin env (TAnd x y) = ?rhs_7
   everyLin env (TCup x y) = ?rhs_9
+  everyLin env (TEq x y) = ?rhs_10

@@ -90,8 +90,8 @@ using (G: Vect en Ty)
             -- but we can avoid using the non-total `unsingleton : List a -> a`
         in map (\(_, outW) => (nmL, outW)) outWS
     in concat (map f v)
-  everyWhere env v (TSingleton {n} t inV) =
-    [(replicate n 0, everyWhere env inV t)]
+  everyWhere env v (TSingleton t inV) =
+    [([], everyWhere env inV t)]
   everyWhere env v (TTable name _ {prf}) =
     mapIndexed (\x => (\i => ([i], initialTableRecordWhereProv name prf (snd x) i))) v
   everyWhere env v TRecordNil = []

@@ -35,6 +35,10 @@ using (G: Vect en Ty)
        : ATrace G TyBool
       -> ATrace G TyBool
       -> ATrace G TyBool
+    TEq
+       : ATrace G a
+      -> ATrace G a
+      -> ATrace G TyBool
     TIf
        : Bool
       -> ATrace G TyBool
@@ -87,6 +91,10 @@ using (G: Vect en Ty)
     let (vx, tx) = teval env x
         (vy, ty) = teval env y
     in (vx && vy, TAnd tx ty)
+  teval env ((==) x y) =
+    let (vx, tx) = teval env x
+        (vy, ty) = teval env y
+    in (vx == vy, TEq tx ty)
   teval env (Op1 f x) =
     let (vx, tx) = teval env x
     in (f vx, TOp1 {op = f} tx)
