@@ -3,6 +3,7 @@ module Expr
 import Data.Vect
 import Data.Fin
 import Record
+import TaggedUnion
 import Ty
 
 %access public export
@@ -48,11 +49,16 @@ mutual
   interpTy (TyList n x) = List (Vect n Nat, interpTy x)
   interpTy (TyFun A T) = interpTy A -> interpTy T
   interpTy (TyRecord rty) = Record {labelType=String} (interpRTy rty)
+  interpTy (TyVariant vty) = Variant (interpVTy vty)
 
   total
   interpRTy : RTy -> List (String, Type)
   interpRTy TyRecordNil = []
   interpRTy (TyRecordExt l ty rty) = (l, interpTy ty) :: interpRTy rty
+  
+  interpVTy : VTy -> List (String, Type)
+  interpVTy TyVariantNil = []
+  interpVTy (TyVariantExt x y z) = (x, interpTy y) :: interpVTy z
 
 -- Convert a proof of label presence for object language records to a proof of label presence for idris records so we can use projection from there
 objToMetaLabelPresenceProof : TyLabelPresent label row ty -> LabelPresent label (interpRTy row) (interpTy ty)

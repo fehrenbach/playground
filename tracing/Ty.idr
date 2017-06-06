@@ -8,7 +8,9 @@ mutual
           | TyList Nat Ty
           | TyFun Ty Ty
           | TyRecord RTy
+          | TyVariant VTy
   data RTy = TyRecordNil | TyRecordExt String Ty RTy
+  data VTy = TyVariantNil | TyVariantExt String Ty VTy
 
 data TyLabelPresent : String -> RTy -> Ty -> Type where
   Here  : TyLabelPresent l (TyRecordExt l ty _) ty
