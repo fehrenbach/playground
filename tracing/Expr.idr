@@ -65,78 +65,98 @@ objToMetaLabelPresenceProof : TyLabelPresent label row ty -> LabelPresent label 
 objToMetaLabelPresenceProof Here = Here
 objToMetaLabelPresenceProof (There prf) = There (objToMetaLabelPresenceProof prf)
 
+infix 5 :?
+
 using (G: Vect en Ty)
   data HasType : (i : Fin en) -> Vect en Ty -> Ty -> Type where
     Stop : HasType FZ (t :: G) t
     Pop : HasType k G t -> HasType (FS k) (u :: G) t
 
-  data Expr : Vect en Ty -> Ty -> Type where
-    Var
-       : HasType i G t
-      -> Expr G t
-    Val
-       : interpTy t
-      -> Expr G t
-    Lam
-       : Expr (a :: G) t
-      -> Expr G (TyFun a t)
-    App
-       : Expr G (TyFun a t)
-      -> Expr G a
-      -> Expr G t
-    (&&)
-       : Expr G TyBool
-      -> Expr G TyBool
-      -> Expr G TyBool
-    (==)
-       : Eq (interpTy a)
-      => Expr G a
-      -> Expr G a
-      -> Expr G TyBool
-    Op1
-       : (interpTy a -> interpTy b)
-      -> Expr G a
-      -> Expr G b
-    Op2
-       : (interpTy a -> interpTy b -> interpTy c)
-      -> Expr G a
-      -> Expr G b
-      -> Expr G c
-    If
-       : Expr G TyBool
-      -> Lazy (Expr G a)
-      -> Lazy (Expr G a)
-      -> Expr G a
-    Cup
-       : {n, m : Nat}
-      -> Expr G (TyList n a) -> {s : Nat} -> { auto sprf : plus n s = maximum n m }
-      -> Expr G (TyList m a) -> {t : Nat} -> { auto tprf : plus m t = maximum n m }
-      -> Expr G (TyList (S (maximum n m)) a)
-    For
-       : Expr (a :: G) (TyList m b)
-      -> Expr G (TyList n a)
-      -> Expr G (TyList (plus n m) b)
-    Singleton
-       : Expr G t
-      -> Expr G (TyList 0 t)
-    Table
-       : String
-      -> List (interpTy (TyRecord row))
-      -> { auto prf : IsBaseRow row }
-      -> Expr G (TyList 1 (TyRecord row))
-    RecordNil
-       : Expr G (TyRecord TyRecordNil)
-    RecordExt
-       : (l : String)
-      -> Expr G t
-      -> Expr G (TyRecord row)
-      -> Expr G (TyRecord (TyRecordExt l t row))
-    Project
-       : (l : String)
-      -> Expr G (TyRecord row)
-      -> { auto prf : TyLabelPresent l row ty }
-      -> Expr G ty
+  mutual 
+    data Expr : Vect en Ty -> Ty -> Type where
+      Var
+         : HasType i G t
+        -> Expr G t
+      Val
+         : interpTy t
+        -> Expr G t
+      Lam
+         : Expr (a :: G) t
+        -> Expr G (TyFun a t)
+      App
+         : Expr G (TyFun a t)
+        -> Expr G a
+        -> Expr G t
+      (&&)
+         : Expr G TyBool
+        -> Expr G TyBool
+        -> Expr G TyBool
+      (==)
+         : Eq (interpTy a)
+        => Expr G a
+        -> Expr G a
+        -> Expr G TyBool
+      Op1
+         : (interpTy a -> interpTy b)
+        -> Expr G a
+        -> Expr G b
+      Op2
+         : (interpTy a -> interpTy b -> interpTy c)
+        -> Expr G a
+        -> Expr G b
+        -> Expr G c
+      If
+         : Expr G TyBool
+        -> Lazy (Expr G a)
+        -> Lazy (Expr G a)
+        -> Expr G a
+      Cup
+         : {n, m : Nat}
+        -> Expr G (TyList n a) -> {s : Nat} -> { auto sprf : plus n s = maximum n m }
+        -> Expr G (TyList m a) -> {t : Nat} -> { auto tprf : plus m t = maximum n m }
+        -> Expr G (TyList (S (maximum n m)) a)
+      For
+         : Expr (a :: G) (TyList m b)
+        -> Expr G (TyList n a)
+        -> Expr G (TyList (plus n m) b)
+      Singleton
+         : Expr G t
+        -> Expr G (TyList 0 t)
+      Table
+         : String
+        -> List (interpTy (TyRecord row))
+        -> { auto prf : IsBaseRow row }
+        -> Expr G (TyList 1 (TyRecord row))
+      RecordNil
+         : Expr G (TyRecord TyRecordNil)
+      RecordExt
+         : (l : String)
+        -> Expr G t
+        -> Expr G (TyRecord row)
+        -> Expr G (TyRecord (TyRecordExt l t row))
+      Project
+         : (l : String)
+        -> Expr G (TyRecord row)
+        -> { auto prf : TyLabelPresent l row ty }
+        -> Expr G ty
+      Constr
+         : (l: String)
+        -> Expr G a
+        -> { auto prf : TyLabelPresent l a v }
+        -> Expr G (TyVariant v)
+      Match
+         : Expr G (TyVariant v)
+        -> Cases G v t
+        -> Expr G t
+      
+    data Case' : Vect en Ty -> String -> (i: Ty) -> (o: Ty) -> Type where
+      Case : {a, b: Ty} -> (label : String) -> (Expr G a -> Expr G b) -> Case' G label a b
 
+    data Cases : Vect en Ty -> VTy -> Ty -> Type where
+      Nil  : Cases G TyVariantNil t
+      (::) : Case' G l r t -> Cases G v t -> Cases G (TyVariantExt l r v) t
+
+      
   namespace Env
     data Env : Vect n Ty -> Type where
       Nil  : Env Nil
@@ -146,6 +166,19 @@ using (G: Vect en Ty)
     lookup : HasType i G t -> Env G -> interpTy t
     lookup Stop (x :: y) = x
     lookup (Pop x) (y :: z) = lookup x z
+
+  total
+  variantPresenceProof : TyLabelPresent l a v -> LabelPresent l (interpTy a) (interpVTy v)
+  variantPresenceProof Here = Here
+  variantPresenceProof (There z) = There (variantPresenceProof z)
+
+  total
+  matchingCase : Variant (interpVTy v) -> Cases G v t -> Expr G t
+  matchingCase (InV _ _ {prf = Here}) [] impossible
+  matchingCase (InV _ _ {prf = (There _)}) [] impossible
+  matchingCase (InV l x {prf = Here}) ((Case l f) :: z) = f (Val x)
+  matchingCase (InV label x {prf = (There y)}) ((Case l f) :: z) =
+    matchingCase (InV label x {prf = y}) z
 
   total
   eval : Env G -> Expr G t -> interpTy t
@@ -168,8 +201,9 @@ using (G: Vect en Ty)
   eval env RecordNil = []
   eval env (RecordExt l e rec) = (l := eval env e) :: eval env rec
   eval env (Project l r { prf }) = project' l (eval env r) (objToMetaLabelPresenceProof prf)
-
-
+  eval env (Constr l e {prf}) = InV l (eval env e) {prf=variantPresenceProof prf}
+  eval env (Match e cs {v}) = eval env (matchingCase (eval env e) cs)
+  
   one : Expr G TyInt
   one = Val 1
 
@@ -184,6 +218,19 @@ using (G: Vect en Ty)
 
   l34567 : Expr G (TyList 1 TyInt)
   l34567 = For (Singleton (Op2 (+) (Var Stop) one)) l23456
+  
+  OneOrPlusOne : Ty
+  OneOrPlusOne = TyVariant (TyVariantExt "i" TyInt (TyVariantExt "f" (TyFun TyInt TyInt) TyVariantNil))
+  
+  varOne : Expr G OneOrPlusOne
+  varOne = Constr "i" one
+  
+  varPlusOne : Expr G OneOrPlusOne
+  varPlusOne = Constr "f" incr
+  
+  two : Expr G TyInt
+  two = Match varPlusOne [ Case "i" (\i => Val 2)
+                         , Case "f" (\f => App f (Val 1)) ]
 
   partial -- mod is not total, or something
   l357 : Expr G (TyList 1 TyInt)
