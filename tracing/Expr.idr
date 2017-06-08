@@ -150,7 +150,7 @@ using (G: Vect en Ty)
         -> Expr G t
       
     data Case' : Vect en Ty -> String -> (i: Ty) -> (o: Ty) -> Type where
-      Case : {a, b: Ty} -> (label : String) -> (Expr G a -> Expr G b) -> Case' G label a b
+      Case : {a, b: Ty} -> (label : String) -> Expr (a :: G) b -> Case' G label a b
 
     data Cases : Vect en Ty -> VTy -> Ty -> Type where
       Nil  : Cases G TyVariantNil t
@@ -172,37 +172,38 @@ using (G: Vect en Ty)
   variantPresenceProof Here = Here
   variantPresenceProof (There z) = There (variantPresenceProof z)
 
-  total
-  matchingCase : Variant (interpVTy v) -> Cases G v t -> Expr G t
-  matchingCase (InV _ _ {prf = Here}) [] impossible
-  matchingCase (InV _ _ {prf = (There _)}) [] impossible
-  matchingCase (InV l x {prf = Here}) ((Case l f) :: z) = f (Val x)
-  matchingCase (InV label x {prf = (There y)}) ((Case l f) :: z) =
-    matchingCase (InV label x {prf = y}) z
+  mutual
+    total
+    eval : Env G -> Expr G t -> interpTy t
+    eval env (Var x) = lookup x env
+    eval env (Val v) = v
+    eval env (Lam body) = \x => eval (x :: env) body
+    eval env (App f e) = eval env f (eval env e)
+    eval env ((&&) x y) = eval env x && eval env y
+    eval env ((==) x y) = eval env x == eval env y
+    eval env (Op1 f x) = f (eval env x)
+    eval env (Op2 op x y) = op (eval env x) (eval env y)
+    eval env (If x y z) = if eval env x then eval env y else eval env z
+    eval env (Cup {a} {n} {m} x {s} {sprf} y {t} {tprf}) =
+         consLabels [1] (map (\(l, x) => (extend 0 l sprf, x)) (eval env x))
+      ++ consLabels [2] (map (\(l, y) => (extend 0 l tprf, y)) (eval env y))
+    eval env (For body input) =
+      concatMap (\(ln, vi) => consLabels ln (eval (vi :: env) body)) (eval env input)
+    eval env (Singleton x) = [ ([], eval env x) ]
+    eval env (Table _ d) = mapIndexed (\x => \i => ([i], x)) d
+    eval env RecordNil = []
+    eval env (RecordExt l e rec) = (l := eval env e) :: eval env rec
+    eval env (Project l r { prf }) = project' l (eval env r) (objToMetaLabelPresenceProof prf)
+    eval env (Constr l e {prf}) = InV l (eval env e) {prf=variantPresenceProof prf}
+    eval env (Match e cs {v}) =
+      match env (eval env e) cs
 
-  total
-  eval : Env G -> Expr G t -> interpTy t
-  eval env (Var x) = lookup x env
-  eval env (Val v) = v
-  eval env (Lam body) = \x => eval (x :: env) body
-  eval env (App f e) = eval env f (eval env e)
-  eval env ((&&) x y) = eval env x && eval env y
-  eval env ((==) x y) = eval env x == eval env y
-  eval env (Op1 f x) = f (eval env x)
-  eval env (Op2 op x y) = op (eval env x) (eval env y)
-  eval env (If x y z) = if eval env x then eval env y else eval env z
-  eval env (Cup {a} {n} {m} x {s} {sprf} y {t} {tprf}) =
-       consLabels [1] (map (\(l, x) => (extend 0 l sprf, x)) (eval env x))
-    ++ consLabels [2] (map (\(l, y) => (extend 0 l tprf, y)) (eval env y))
-  eval env (For body input) =
-    concatMap (\(ln, vi) => consLabels ln (eval (vi :: env) body)) (eval env input)
-  eval env (Singleton x) = [ ([], eval env x) ]
-  eval env (Table _ d) = mapIndexed (\x => \i => ([i], x)) d
-  eval env RecordNil = []
-  eval env (RecordExt l e rec) = (l := eval env e) :: eval env rec
-  eval env (Project l r { prf }) = project' l (eval env r) (objToMetaLabelPresenceProof prf)
-  eval env (Constr l e {prf}) = InV l (eval env e) {prf=variantPresenceProof prf}
-  eval env (Match e cs {v}) = eval env (matchingCase (eval env e) cs)
+    match : Env G -> interpTy (TyVariant v) -> Cases G v t -> interpTy t
+    match env (InV _ _ {prf = Here}) [] impossible
+    match env (InV _ _ {prf = (There _)}) [] impossible
+    match env (InV _ x {prf = Here}) ((Case _ e) :: _) = eval (x :: env) e
+    match env (InV label x {prf = (There w)}) (y :: z) = match env (InV label x {prf=w}) z
+    
   
   one : Expr G TyInt
   one = Val 1
@@ -228,9 +229,18 @@ using (G: Vect en Ty)
   varPlusOne : Expr G OneOrPlusOne
   varPlusOne = Constr "f" incr
   
+  -- two : Expr G TyInt
+  -- two = Match varPlusOne [ Case "i" (\i => Val 2)
+                         -- , Case "f" (\f => App f (Val 1)) ]
+
   two : Expr G TyInt
-  two = Match varPlusOne [ Case "i" (\i => Val 2)
-                         , Case "f" (\f => App f (Val 1)) ]
+  two = Match varPlusOne [ Case "i" (App incr (Var Stop)) 
+                         , Case "f" (App (Var Stop) (Val 1)) ]
+
+  two' : Expr G TyInt
+  two' = Match varOne [ Case "i" (App incr (Var Stop)) 
+                      , Case "f" (App (Var Stop) (Val 1)) ]
+
 
   partial -- mod is not total, or something
   l357 : Expr G (TyList 1 TyInt)
