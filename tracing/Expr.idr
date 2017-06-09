@@ -55,7 +55,7 @@ mutual
   interpRTy : RTy -> List (String, Type)
   interpRTy TyRecordNil = []
   interpRTy (TyRecordExt l ty rty) = (l, interpTy ty) :: interpRTy rty
-  
+
   interpVTy : VTy -> List (String, Type)
   interpVTy TyVariantNil = []
   interpVTy (TyVariantExt x y z) = (x, interpTy y) :: interpVTy z
@@ -72,7 +72,7 @@ using (G: Vect en Ty)
     Stop : HasType FZ (t :: G) t
     Pop : HasType k G t -> HasType (FS k) (u :: G) t
 
-  mutual 
+  mutual
     data Expr : Vect en Ty -> Ty -> Type where
       Var
          : HasType i G t
@@ -87,6 +87,11 @@ using (G: Vect en Ty)
          : Expr G (TyFun a t)
         -> Expr G a
         -> Expr G t
+      (+)
+         : Num (interpTy a)
+        => Expr G a
+        -> Expr G a
+        -> Expr G a
       (&&)
          : Expr G TyBool
         -> Expr G TyBool
@@ -96,15 +101,6 @@ using (G: Vect en Ty)
         => Expr G a
         -> Expr G a
         -> Expr G TyBool
-      Op1
-         : (interpTy a -> interpTy b)
-        -> Expr G a
-        -> Expr G b
-      Op2
-         : (interpTy a -> interpTy b -> interpTy c)
-        -> Expr G a
-        -> Expr G b
-        -> Expr G c
       If
          : Expr G TyBool
         -> Lazy (Expr G a)
@@ -148,15 +144,15 @@ using (G: Vect en Ty)
          : Expr G (TyVariant v)
         -> Cases G v t
         -> Expr G t
-      
-    data Case' : Vect en Ty -> String -> (i: Ty) -> (o: Ty) -> Type where
+
+    data Case' : Vect en Ty -> String -> Ty -> Ty -> Type where
       Case : {a, b: Ty} -> (label : String) -> Expr (a :: G) b -> Case' G label a b
 
     data Cases : Vect en Ty -> VTy -> Ty -> Type where
       Nil  : Cases G TyVariantNil t
       (::) : Case' G l r t -> Cases G v t -> Cases G (TyVariantExt l r v) t
 
-      
+
   namespace Env
     data Env : Vect n Ty -> Type where
       Nil  : Env Nil
@@ -178,10 +174,9 @@ using (G: Vect en Ty)
   eval env (Val v) = v
   eval env (Lam body) = \x => eval (x :: env) body
   eval env (App f e) = eval env f (eval env e)
+  eval env ((+) x y) = eval env x + eval env y
   eval env ((&&) x y) = eval env x && eval env y
   eval env ((==) x y) = eval env x == eval env y
-  eval env (Op1 f x) = f (eval env x)
-  eval env (Op2 op x y) = op (eval env x) (eval env y)
   eval env (If x y z) = if eval env x then eval env y else eval env z
   eval env (Cup {a} {n} {m} x {s} {sprf} y {t} {tprf}) =
        consLabels [1] (map (\(l, x) => (extend 0 l sprf, x)) (eval env x))
@@ -199,13 +194,13 @@ using (G: Vect en Ty)
    where
     match : Env G -> interpTy (TyVariant v) -> Cases G v t -> interpTy t
     match env (InV _ x {prf = Here}) ((Case _ e) :: _) = eval (x :: env) e
-    match env (InV label x {prf = (There w)}) (y :: z) = match env (InV label x {prf=w}) z
+    match env (InV label x {prf = There w}) (_ :: z) = match env (InV label x {prf=w}) z
 
   one : Expr G TyInt
   one = Val 1
 
   incr : Expr G (TyFun TyInt TyInt)
-  incr = Lam (Op2 (+) (Var Stop) one)
+  incr = Lam ((+) (Var Stop) one)
 
   l12345 : Expr G (TyList 1 TyInt)
   l12345 = Val [ ([0], 1), ([1], 2), ([2], 3), ([3], 4), ([4], 5) ]
@@ -214,50 +209,46 @@ using (G: Vect en Ty)
   l23456 = For (Singleton (App incr (Var Stop))) l12345
 
   l34567 : Expr G (TyList 1 TyInt)
-  l34567 = For (Singleton (Op2 (+) (Var Stop) one)) l23456
-  
+  l34567 = For (Singleton (App incr (Var Stop))) l23456
+
   OneOrPlusOne : Ty
   OneOrPlusOne = TyVariant (TyVariantExt "i" TyInt (TyVariantExt "f" (TyFun TyInt TyInt) TyVariantNil))
-  
+
   varOne : Expr G OneOrPlusOne
   varOne = Constr "i" one
-  
+
   varPlusOne : Expr G OneOrPlusOne
   varPlusOne = Constr "f" incr
-  
+
   -- two : Expr G TyInt
   -- two = Match varPlusOne [ Case "i" (\i => Val 2)
                          -- , Case "f" (\f => App f (Val 1)) ]
 
   two : Expr G TyInt
-  two = Match varPlusOne [ Case "i" (App incr (Var Stop)) 
+  two = Match varPlusOne [ Case "i" (App incr (Var Stop))
                          , Case "f" (App (Var Stop) (Val 1)) ]
 
   two' : Expr G TyInt
-  two' = Match varOne [ Case "i" (App incr (Var Stop)) 
+  two' = Match varOne [ Case "i" (App incr (Var Stop))
                       , Case "f" (App (Var Stop) (Val 1)) ]
 
 
-  partial -- mod is not total, or something
-  l357 : Expr G (TyList 1 TyInt)
-  l357 = For (If (Op2 (\x => \y => mod x 2 == y) (Var Stop) one) (Singleton (Var Stop)) (Val [])) l34567
-
-  multl12l23 : Expr G (TyList 2 TyInt)
-  multl12l23 = For (For (Singleton (Op2 (*) (Var Stop) (Var (Pop Stop)))) l23456) l12345
-
+  -- multl12l23 : Expr G (TyList 2 TyInt)
+  -- multl12l23 = For (For (Singleton (Op2 (*) (Var Stop) (Var (Pop Stop)))) l23456) l12345
+ 
   -- traceMult : Expr G (TyTraced (TyList TyInt))
   -- traceMult = Trace multl12l23
-
+ 
   -- should be equal to multl12l23
   -- dataTraceMult : Expr G (TyList TyInt)
   -- dataTraceMult = Data traceMult
 
   a2 : Expr G (TyRecord (TyRecordExt "a" TyInt TyRecordNil))
-  a2 = RecordExt "a" (Op2 (+) one one) RecordNil
+  a2 = RecordExt "a" ((+) one one) RecordNil
 
   true : Expr G TyBool
   true = Val True
-
+ 
   a2bTrue : Expr G (TyRecord (TyRecordExt "b" TyBool (TyRecordExt "a" TyInt TyRecordNil)))
   a2bTrue = RecordExt "b" true a2
 
@@ -293,8 +284,7 @@ using (G: Vect en Ty)
                    , [ "A" := 4, "B" := 3, "C" := 9 ] ]
 
   bigQ : Expr G (TyList 1 (TyRecord (TyRecordExt "A" TyInt (TyRecordExt "B" TyInt TyRecordNil))))
-  bigQ = For (If (Op2 (the (Int -> Int -> Bool) (==))
-                      (Project "B" (Var Stop)) (the (Expr _ TyInt) (Val 3)))
+  bigQ = For (If ((the (Expr _ TyInt) (Project "B" (Var Stop))) == (the (Expr _ TyInt) (Val 3)))
                  (Singleton (RecordExt "A" (Project "A" (Var Stop))
                             (RecordExt "B" (Project "C" (Var Stop))
                             RecordNil)))
