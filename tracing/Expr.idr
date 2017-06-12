@@ -40,31 +40,33 @@ extend {n = S _} {k = S _} {m = Z} _ _ Refl impossible
 extend {n = S j} {k = Z}   {m = S (plus j Z)}     y (x :: xs) Refl = x :: extend y xs Refl
 extend {n = S j} {k = S k} {m = S (plus j (S k))} y (x :: xs) Refl = x :: extend y xs Refl
 
-mutual
-  total
-  interpTy : Ty -> Type
-  interpTy TyInt = Int
-  interpTy TyBool = Bool
-  interpTy TyString = String
-  interpTy (TyList n x) = List (Vect n Nat, interpTy x)
-  interpTy (TyFun A T) = interpTy A -> interpTy T
-  interpTy (TyRecord rty) = Record {labelType=String} (interpRTy rty)
-  interpTy (TyVariant vty) = Variant (interpVTy vty)
-
-  total
-  interpRTy : RTy -> List (String, Type)
+total
+interpTy : Vect s Type -> Ty s -> Type
+interpTy env@(_ :: _) (TyVar i) = index i env
+interpTy {s} env (TyForall withAlpha) =
+  -- (alpha : Ty s) -> interpTy ((interpTy env (assert_smaller (TyForall withAlpha) alpha)) :: env) withAlpha
+  (alpha : Type) -> interpTy (alpha :: env) withAlpha
+interpTy _ TyInt = Int
+interpTy _ TyBool = Bool
+interpTy _ TyString = String
+interpTy env (TyList n x) = List (Vect n Nat, interpTy env x)
+interpTy env (TyFun A T) = interpTy env A -> interpTy env T
+interpTy env (TyRecord rty) = Record {labelType=String} (interpRTy rty) where
   interpRTy TyRecordNil = []
-  interpRTy (TyRecordExt l ty rty) = (l, interpTy ty) :: interpRTy rty
-
-  interpVTy : VTy -> List (String, Type)
+  interpRTy (TyRecordExt l ty rty) = (l, interpTy env ty) :: interpRTy rty
+interpTy env (TyVariant vty) = Variant (interpVTy vty) where
   interpVTy TyVariantNil = []
-  interpVTy (TyVariantExt x y z) = (x, interpTy y) :: interpVTy z
+  interpVTy (TyVariantExt x y z) = (x, interpTy env y) :: interpVTy z
+
+pid : interpTy [] PolyId
+pid = \t => \x => x
 
 -- Convert a proof of label presence for object language records to a proof of label presence for idris records so we can use projection from there
-objToMetaLabelPresenceProof : TyLabelPresent label row ty -> LabelPresent label (interpRTy row) (interpTy ty)
-objToMetaLabelPresenceProof Here = Here
-objToMetaLabelPresenceProof (There prf) = There (objToMetaLabelPresenceProof prf)
+-- objToMetaLabelPresenceProof : TyLabelPresent label ty row -> LabelPresent label (interpRTy (TyRecord row)) (interpTy ty)
+-- objToMetaLabelPresenceProof Here = Here
+-- objToMetaLabelPresenceProof (There prf) = There (objToMetaLabelPresenceProof prf)
 
+{-
 infix 5 :?
 
 using (G: Vect en Ty)
@@ -235,10 +237,10 @@ using (G: Vect en Ty)
 
   -- multl12l23 : Expr G (TyList 2 TyInt)
   -- multl12l23 = For (For (Singleton (Op2 (*) (Var Stop) (Var (Pop Stop)))) l23456) l12345
- 
+
   -- traceMult : Expr G (TyTraced (TyList TyInt))
   -- traceMult = Trace multl12l23
- 
+
   -- should be equal to multl12l23
   -- dataTraceMult : Expr G (TyList TyInt)
   -- dataTraceMult = Data traceMult
@@ -248,7 +250,7 @@ using (G: Vect en Ty)
 
   true : Expr G TyBool
   true = Val True
- 
+
   a2bTrue : Expr G (TyRecord (TyRecordExt "b" TyBool (TyRecordExt "a" TyInt TyRecordNil)))
   a2bTrue = RecordExt "b" true a2
 
@@ -325,3 +327,4 @@ using (G: Vect en Ty)
 
   -- Okay, so this is difficult because of functional extensionality problems.
   -- total teval_consistent : (env : Env G) -> (e : Expr G t) -> eval env e = fst (teval env e)
+-}

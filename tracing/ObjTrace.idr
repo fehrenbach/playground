@@ -25,7 +25,7 @@ selfTrace : {G : Vect en Ty} -> (p : Expr G t) -> Expr G (traceType (traceDepth 
 
 traceType' : {G : Vect en Ty} -> (p : Expr G t) -> Ty
 traceType' (Var x) = ?traceType'_rhs_1
-traceType' (Val x) = ?traceType'_rhs_2
+traceType' (Val {t} _) = traceType?traceType'_rhs_2
 traceType' (Lam x) = ?traceType'_rhs_3
 traceType' (App x y) = ?traceType'_rhs_4
 traceType' (x + y) = ?traceType'_rhs_5
