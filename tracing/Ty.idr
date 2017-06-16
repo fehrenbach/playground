@@ -8,9 +8,9 @@ import Data.Fin
 mutual
   -- Indexed by the number of type variables
   data Ty : Nat -> Type where
-    TyInt : Ty 0
-    TyBool : Ty 0
-    TyString : Ty 0
+    TyInt : Ty s
+    TyBool : Ty s
+    TyString : Ty s
     TyList : Nat -> Ty s -> Ty s
     TyFun : Ty s -> Ty s -> Ty s
     TyVar : Fin s -> Ty s
