@@ -121,6 +121,51 @@ ab = proj (SProxy :: SProxy "a") (rcons (SProxy :: SProxy "b") (int 5)
 value :: forall a. Identity a -> a
 value (Identity t) = t
 
+-- data Where a = Where a
+
+-- fakeRecord v = { table: "Fake"
+               -- , column: "News"
+               -- , row: -1
+               -- , data: v }
+
+-- instance whereSemantics :: Symantics Where where
+--   int x = Where x
+--   plus (Where x) (Where y) = Where (x + y)
+--   var v = Where v
+--   proj nm (Where r) = Where (get nm r)
+--   rnil = Where {}
+
+--   rcons :: forall label t a b.
+--            IsSymbol label => RowLacks label a => RowCons label t a b =>
+--            SProxy label -> Where t -> Where (Record a) -> Where (Record b)
+--   rcons l (Where v) (Where r) = Where (insert l (fakeRecord v) r)
+
+-- newtype W a = W { data :: a }
+
+-- class WhereList (la :: RowList) (lb :: RowList) | la -> lb
+-- instance whereListNil :: WhereList Nil Nil
+-- instance whereListCons ::
+--   (Where a b,
+--    WhereList la lb) =>
+--   WhereList (Cons k a la) (Cons k (W b) lb)
+
+-- class Where a b | a -> b where
+--   fake :: a -> b
+
+-- instance whereInt :: Where Int Int where
+--   fake = id
+-- instance whereString :: Where String String where
+--   fake = id
+  
+-- instance whereRecord ::
+--   (RowToList a la,
+--    WhereList la lb,
+--    ListToRow lb b) =>
+--   Where (Record a) (Record b) where
+--   fake r = recordMap (\l v -> fakeRecord v) r
+
+-- abc :: forall x y. Where x y => x -> y
+-- abc asentuh = ?huh
 
 main :: forall e. Eff (console :: CONSOLE | e) Unit
 main = do

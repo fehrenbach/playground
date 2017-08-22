@@ -76,7 +76,8 @@ using (G: Vect en Ty)
            relatedOutTraces = filter (\(l, _) => l == ln) outTraces
          in concat (map (\(_, t) => map (\(lm, rb) => (ln ++ lm, [ "data" := rb . "data"
                                                                  , "prov" := rb . "prov" ++ r . "prov" ]))
-                                        (everyLin (r . "data" :: env) (assert_smaller (TFor inTrace inValues outTraces) t)))
+                                        (everyLin (r . "data" :: env) 
+                                                  (assert_smaller (TFor inTrace inValues outTraces) t)))
                         relatedOutTraces)
    in concat (map f inLin)
   everyLin env (TIf _ _ z) = everyLin env z
