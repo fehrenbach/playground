@@ -1,7 +1,6 @@
 module Lib where
 
-someFunc :: IO ()
-someFunc = putStrLn "someFunc"
+import Control.Monad.State.Strict
 
 type Variable = Int 
 
@@ -20,41 +19,61 @@ data Tm
   deriving (Show)
 
 data Sem
-  = LAM (Sem -> Sem)
+  = LAM (Sem -> State Int Sem)
   | PAIR (Sem, Sem)
   | SYN Tm
 
-type State = Int
+freshVariable :: State Int Int
+freshVariable = state (\s -> (s, s+1))
 
-reflect :: Ty -> Tm -> Sem
+reflect :: Ty -> Tm -> State Int Sem
 reflect (Arrow a b) t =
-  LAM (\s -> reflect b (App t (reify a s)))
-reflect (Prod a b) t =
-  PAIR (reflect a (Fst t), reflect b (Snd t))
-reflect (Basic _) t = SYN t
+  return $ LAM (\s -> do
+                   s' <- reify a s
+                   reflect b (App t s'))
+reflect (Prod a b) t = do
+  a <- reflect a (Fst t)
+  b <- reflect b (Snd t)
+  return (PAIR (a, b))
+reflect (Basic _) t = return (SYN t)
 
-reify :: Ty -> Sem -> Tm
-reify (Arrow a b) (LAM s) =
-  let x = _
-  in Lam x (reify b (s (reflect a (Var x))))
-reify (Prod a b) (PAIR (s, t)) =
-  Pair (reify a s) (reify b t)
-reify (Basic _) (SYN t) = t
+reify :: Ty -> Sem -> State Int Tm
+reify (Arrow a b) (LAM s) = do
+  x <- freshVariable
+  ra <- reflect a (Var x)
+  sra <- s ra
+  rb <- reify b sra
+  return (Lam x rb)
+reify (Prod a b) (PAIR (s, t)) = do
+  a <- reify a s
+  b <- reify b t
+  return (Pair a b)
+reify (Basic _) (SYN t) = return t
 
-eval :: [(Variable, Sem)] -> Tm -> Sem
+eval :: [(Variable, Sem)] -> Tm -> State Int Sem
 eval env (Var x) = case lookup x env of
-                     Just v -> v
-eval env (Lam x b) = LAM (\s -> eval ((x, s):env) b)
-eval env (App s t) = case eval env s of
-                       LAM s -> s (eval env t)
-eval env (Pair s t) = PAIR (eval env s, eval env t)
-eval env (Fst p) = case eval env p of
-                     PAIR (s, t) -> s
-eval env (Snd p) = case eval env p of
-                     PAIR (s, t) -> t
+                     Just v -> return v
+eval env (Lam x b) =
+  return (LAM (\s -> eval ((x, s):env) b))
+eval env (App s t) = do
+  LAM s <- eval env s
+  t <- eval env t
+  s t
+eval env (Pair s t) = do
+  s <- eval env s
+  t <- eval env t
+  return (PAIR (s, t))
+eval env (Fst p) = do
+  PAIR (s, t) <- eval env p
+  return s
+eval env (Snd p) = do
+  PAIR (s, t) <- eval env p
+  return t
 
 nbe :: Ty -> Tm -> Tm
-nbe a t = reify a (eval [] t)
+nbe a t = flip evalState 100 $ do
+  e <- eval [] t
+  reify a e
 
 k = Lam 0 (Lam 1 (Var 0))
 s = Lam 0 (Lam 1 (Lam 2 (App (App (Var 0) (Var 2)) (App (Var 1) (Var 2)))))
