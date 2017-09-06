@@ -13,6 +13,7 @@
       "purescript-type-equality": "^2.1.0",
       "purescript-record": "^0.2.0",
       "purescript-const": "^3.0.0",
+      "purescript-leibniz": "^4.0.0",
       "purescript-console": "^3.0.0"
   },
   "devDependencies": {
