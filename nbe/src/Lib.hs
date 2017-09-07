@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 module Lib where
 
 import Control.Monad.State.Strict
@@ -6,36 +7,50 @@ type Variable = Int
 
 data Ty
   = Basic String
+  | StringT
   | Arrow Ty Ty
-  | Prod Ty Ty
+  | RecordT [(String, Ty)]
+  | VariantT [(String, Ty)]
+  | UnknownT
+  deriving (Show)
 
 data Tm
   = Var Variable
   | Lam Variable Tm
+  | Str String
   | App Tm Tm
-  | Pair Tm Tm
-  | Fst Tm
-  | Snd Tm
-  deriving (Show)
+  | Record [(String, Tm)] -- do I want a special label type instead? more implementation effort, but it might be clearer what's going on..
+  | DynProj Tm Tm
+  deriving (Eq, Show)
 
 data Sem
   = LAM (Sem -> State Int Sem)
-  | PAIR (Sem, Sem)
+  | RECORD [(String, Sem)]
+  | STRING String
   | SYN Tm
 
 freshVariable :: State Int Int
 freshVariable = state (\s -> (s, s+1))
+
 
 reflect :: Ty -> Tm -> State Int Sem
 reflect (Arrow a b) t =
   return $ LAM (\s -> do
                    s' <- reify a s
                    reflect b (App t s'))
-reflect (Prod a b) t = do
-  a <- reflect a (Fst t)
-  b <- reflect b (Snd t)
-  return (PAIR (a, b))
+reflect (RecordT flds) t = do
+  flds <- traverse (\(l, x) -> (l,) <$> reflect x (DynProj (Str l) t)) flds
+  return (RECORD flds)
+-- reflect StringT (Str t) = return (STRING t)
+reflect StringT (DynProj l t) = do
+  -- Ugh. I guess I can see whether I succeeded in evaluating things away? Is that needed? I'm confused.
+  -- l <- reflect StringT l
+  -- case l of
+    -- STRING l -> 
+  -- t <- reflect (RecordT [ 
+  return (SYN (DynProj l t))
 reflect (Basic _) t = return (SYN t)
+-- reflect ty tm = error $ show ty
 
 reify :: Ty -> Sem -> State Int Tm
 reify (Arrow a b) (LAM s) = do
@@ -44,11 +59,16 @@ reify (Arrow a b) (LAM s) = do
   sra <- s ra
   rb <- reify b sra
   return (Lam x rb)
-reify (Prod a b) (PAIR (s, t)) = do
-  a <- reify a s
-  b <- reify b t
-  return (Pair a b)
+reify (RecordT fieldTypes) (RECORD fieldSemantics) = do
+  fields <- traverse (\((l, fieldType), (l', fieldSemantics)) ->
+                        (l,) <$> reify fieldType fieldSemantics)
+              (zip fieldTypes fieldSemantics)
+  return (Record fields)
+reify StringT (STRING s) = return (Str s)
+reify StringT (SYN t) = return t -- huh should should this be the case?: reify _ (SYN t) = t
 reify (Basic _) (SYN t) = return t
+reify t s = error (show t)
+
 
 eval :: [(Variable, Sem)] -> Tm -> State Int Sem
 eval env (Var x) = case lookup x env of
@@ -59,25 +79,25 @@ eval env (App s t) = do
   LAM s <- eval env s
   t <- eval env t
   s t
-eval env (Pair s t) = do
-  s <- eval env s
-  t <- eval env t
-  return (PAIR (s, t))
-eval env (Fst p) = do
-  PAIR (s, t) <- eval env p
-  return s
-eval env (Snd p) = do
-  PAIR (s, t) <- eval env p
-  return t
+eval env (Record fields) = do
+  fields <- traverse (\(l, x) -> (l,) <$> eval env x) fields
+  return (RECORD fields)
+eval env (DynProj l r) = do
+  STRING l <- eval env l
+  RECORD r <- eval env r
+  case lookup l r of
+    Just v -> return v
+    Nothing -> error "not a label in record"
+eval env (Str s) = return (STRING s)
+  
 
 nbe :: Ty -> Tm -> Tm
-nbe a t = flip evalState 100 $ do
+nbe a t = flip evalState 0 $ do
   e <- eval [] t
   reify a e
 
-k = Lam 0 (Lam 1 (Var 0))
-s = Lam 0 (Lam 1 (Lam 2 (App (App (Var 0) (Var 2)) (App (Var 1) (Var 2)))))
-skk = App (App s k) k
+fst3 (x, _, _) = x
 
-idt = Arrow (Basic "a") (Basic "a")
-idt' = Arrow (Arrow (Basic "a") (Basic "b")) (Arrow (Basic "a") (Basic "b"))
+lookupBy f x [] = Nothing
+lookupBy f x (y:ys) | f y == x = Just y
+lookupBy f x (_:ys) = lookupBy f x ys
