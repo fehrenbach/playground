@@ -173,3 +173,27 @@ nbe' :: Type a -> Term a -> C a
 nbe' a m = Init (\k -> eval m (\m -> reify a m (\v -> SRet k v)))
 
 -- end
+
+-- WP examples
+k :: Term (a -> b -> a)
+k = Lam (\x -> Lam (\y -> Var x))
+
+s :: Term ((a -> b -> c) -> (a -> b) -> a -> c)
+s = Lam (\x -> Lam (\y -> Lam (\z -> App (App (Var x) (Var z)) (App (Var y) (Var z)))))
+
+skk :: Term (a -> a)
+skk = App (App s k) k
+
+idt :: Type (Base -> Base)
+idt = Arr Base Base
+
+idt' :: Type ((Base -> Base) -> (Base -> Base))
+idt' = Arr (Arr Base Base) (Arr Base Base)
+
+foo :: (NF (Base -> Base) -> O) -> O
+foo = nbe idt skk
+
+foo' :: (NF ((Base -> Base) -> Base -> Base) -> O) -> O
+foo' = nbe idt' skk
+
+-- Well, at least they typecheck.
