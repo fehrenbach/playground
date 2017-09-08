@@ -29,6 +29,11 @@ data Sem
   | STRING String
   | SYN Tm
 
+instance Show Sem where
+  show (LAM _) = "function"
+  show (PAIR (a, b)) = "(" ++ show a ++ ", " ++ show b ++ ")"
+  show (SYN tm) = show tm
+
 freshVariable :: State Int Int
 freshVariable = state (\s -> (s, s+1))
 
