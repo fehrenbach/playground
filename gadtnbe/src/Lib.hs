@@ -11,9 +11,16 @@ someFunc = putStrLn "someFunc"
 -- module CPS_CBV = struct
 
 --   type 'a k and 'a v and 'a y
-data K a
-data V a
-data Y a
+
+-- alpha k = alpha v -> o
+-- data K a
+-- type K a = V a -> O
+
+-- alpha v = alpha nf
+-- data V a
+-- type V a = NF a
+
+type Y a = String
 
 --   (* Intermediate language of values in CPS, typed *)
 
@@ -24,11 +31,12 @@ data Y a
 --   and 'a x = 'a vl
 
 data Value a where
-  VFun :: (Value a -> MD b) -> Value (a -> b)
+  VFun :: (Value a -> (Value b -> O) -> O) -> Value (a -> b)
   VBase :: Base -> Value Base
   VBool :: Bool -> Value Bool
+  VInt :: Int -> Value Int
 
-type MD a = (Value a -> O) -> O
+-- type MD a = (Value a -> O) -> O
 
 --   (* Typed target language: Î²-normal, Î·-long Î»-terms
 --      (modulo commuting conversions) *)
@@ -39,8 +47,9 @@ type MD a = (Value a -> O) -> O
 
 data O where
   SIf :: AT Bool -> O -> O -> O
-  SRet :: K a -> NF a -> O
-  SBind :: AT (a -> b) -> NF a -> (V b -> O) -> O
+  SRet :: (NF a -> O) -> NF a -> O
+  SBind :: AT (a -> b) -> NF a -> (NF b -> O) -> O
+  PRINTED :: String -> O
 
 --   and 'a nf = NBool : bool -> bool nf
 --             | NLam : ('a y -> 'b k -> o) -> ('a -> 'b) nf
@@ -48,7 +57,8 @@ data O where
 
 data NF a where
   NBool :: Bool -> NF Bool
-  NLam :: (Y a -> K b -> O) -> NF (a -> b)
+  NInt :: Int -> NF Int
+  NLam :: (Y a -> (NF b -> O) -> O) -> NF (a -> b)
   NAt :: AT Base -> NF Base
 
 --   and 'a at = AVar of 'a y
@@ -56,7 +66,7 @@ data NF a where
 
 data AT a
   = AVar (Y a)
-  | AVal (V a)
+  | AVal (NF a)
 
 --   and base = Atom of base at
 
@@ -107,7 +117,7 @@ tt = Var (VBool True)
 --         if b then eval m c else eval n c)
 --     | CC m -> fun c -> eval m (fun (VFun f) -> f (VFun (fun x _ -> c x)) c)
 
-eval :: Term a -> MD a
+eval :: Term a -> (Value a -> O) -> O
 eval (Var x) = \c -> c x
 eval (Lam f) = \c -> c (VFun (\x k -> eval (f x) k))
 eval (App m n) = \c -> eval m (\(VFun f) -> eval n (\n -> f n c))
@@ -125,6 +135,7 @@ ex = Lam (\x -> If tt (Var x) (Var x))
 --              | Arr : 'a tp * 'b tp -> ('a -> 'b) tp
 data Type a where
   Boolean :: Type Bool
+  IntT :: Type Int
   Base :: Type Base
   Arr :: Type a -> Type b -> Type (a -> b)
 
@@ -142,6 +153,7 @@ reify :: Type a -> Value a -> (NF a -> O) -> O
 reify (Arr a b) (VFun f) = \c -> c (NLam (\x k -> reflect a (AVar x) (\x -> f x (\v -> reify b v (\v -> SRet k v)))))
 reify Base (VBase (Atom r)) = \c -> c (NAt r)
 reify Boolean (VBool b) = \c -> c (NBool b)
+reify IntT (VInt i) = \c -> c (NInt i)
 
 --   and reflect : type a. a tp -> a at -> (a vl -> o) -> o =
 --     fun a x -> match a, x with
@@ -165,7 +177,7 @@ nbe :: Type a -> Term a -> (NF a -> O) -> O
 nbe a m k = eval m (\m -> reify a m k)
 
 --   type 'a c = Init of ('a k -> o)
-data C a = Init (K a -> O)
+data C a = Init ((NF a -> O) -> O)
 
 --   let nbe : type a. a tp -> a tm -> a c = fun a m ->
 --     Init (fun k -> eval m (fun m -> reify a m (fun v -> SRet (k, v))))
@@ -196,4 +208,32 @@ foo = nbe idt skk
 foo' :: (NF ((Base -> Base) -> Base -> Base) -> O) -> O
 foo' = nbe idt' skk
 
+bla :: Type t -> Term t -> String
+bla ty tm = (\nfttoo -> showO (nfttoo (\nft -> PRINTED (showNF nft)))) (nbe ty tm)
+
 -- Well, at least they typecheck.
+-- bla :: O
+-- bla = nbe idt' skk NBE
+
+showAT :: AT a -> String
+showAT (AVar s) = s
+showAT (AVal nfa) = "(AVal: " ++ showNF nfa ++ ")"
+
+showNF :: NF a -> String
+showNF (NBool b) = show b
+showNF (NInt i) = show i
+showNF (NLam f) = "(\v." ++ showO ((f "v") (\nfb -> PRINTED (showNF nfb))) ++ ")"
+showNF (NAt at) = "(NAt: " ++ showAT at ++ ")"
+-- showNF (NAny at) = showAt at
+-- showNF _ = "showNF"
+
+showO :: O -> String
+showO (SIf c t e) = "(if " ++ showAT c ++ " then " ++ showO t ++ " else " ++ showO e ++ ")"
+showO (SRet nfatoo nfa) = showO (nfatoo nfa)
+showO (SBind atab nfa nfbtoo) = "(SBind: " ++ showAT atab ++ " " ++ showNF nfa ++ ")"
+showO (PRINTED s) = s
+
+-- showO (NBE nfa) = showNF nfa
+-- showO (SIf b t e) = "if"
+-- showO (SRet nfatoo nfa) = showO (nfatoo nfa)
+-- showO (SBind atatob nfa nfbtoo) = "\varb." ++ showNF nfa ++ showO (nfbtoo (NAny (AVar "varb")))
