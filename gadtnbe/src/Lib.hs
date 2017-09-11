@@ -2,6 +2,10 @@
 
 module Lib where
 
+import Control.Monad.State.Strict
+
+type M a = State Int a
+
 someFunc :: IO ()
 someFunc = putStrLn "someFunc"
 
@@ -49,7 +53,7 @@ data O where
   SIf :: AT Bool -> O -> O -> O
   SRet :: (NF a -> O) -> NF a -> O
   SBind :: AT (a -> b) -> NF a -> (NF b -> O) -> O
-  PRINTED :: String -> O
+  PRINTED :: M String -> O
 
 --   and 'a nf = NBool : bool -> bool nf
 --             | NLam : ('a y -> 'b k -> o) -> ('a -> 'b) nf
@@ -209,31 +213,45 @@ foo' :: (NF ((Base -> Base) -> Base -> Base) -> O) -> O
 foo' = nbe idt' skk
 
 bla :: Type t -> Term t -> String
-bla ty tm = (\nfttoo -> showO (nfttoo (\nft -> PRINTED (showNF nft)))) (nbe ty tm)
+bla ty tm = (\nfttoo -> flip evalState 0 $ showO (nfttoo (\nft -> PRINTED (showNF nft)))) (nbe ty tm)
 
 -- Well, at least they typecheck.
 -- bla :: O
 -- bla = nbe idt' skk NBE
 
-showAT :: AT a -> String
-showAT (AVar s) = s
-showAT (AVal nfa) = "(AVal: " ++ showNF nfa ++ ")"
+freshVariable :: State Int String
+freshVariable = state (\s -> ("v" ++ show s, s+1))
 
-showNF :: NF a -> String
-showNF (NBool b) = show b
-showNF (NInt i) = show i
-showNF (NLam f) = "(\v." ++ showO ((f "v") (\nfb -> PRINTED (showNF nfb))) ++ ")"
-showNF (NAt at) = "(NAt: " ++ showAT at ++ ")"
+
+showAT :: AT a -> M String
+showAT (AVar s) = return s
+showAT (AVal nfa) = showNF nfa
+
+showNF :: NF a -> M String
+showNF (NBool b) = return $ show b
+showNF (NInt i) = return $ show i
+showNF (NLam f) = do
+  v <- freshVariable
+  body <- showO ((f v) (\nfb -> PRINTED (showNF nfb)))
+  return $ "(\\" ++ v ++ "." ++ body ++ ")"
+  -- "(\v." ++ showO ((f "v") (\nfb -> PRINTED (showNF nfb))) ++ ")"
+showNF (NAt at) = showAT at
 -- showNF (NAny at) = showAt at
 -- showNF _ = "showNF"
 
-showO :: O -> String
-showO (SIf c t e) = "(if " ++ showAT c ++ " then " ++ showO t ++ " else " ++ showO e ++ ")"
+showO :: O -> M String
+showO (SIf c t e) = do
+  c <- showAT c
+  t <- showO t
+  e <- showO e
+  return $ "(if " ++ c ++ " then " ++ t ++ " else " ++ e ++ ")"
 showO (SRet nfatoo nfa) = showO (nfatoo nfa)
-showO (SBind atab nfa nfbtoo) = "(SBind: " ++ showAT atab ++ " " ++ showNF nfa ++ ")"
+showO (SBind atab nfa nfbtoo) = do
+  atab <- showAT atab
+  nfa <- showNF nfa
+  -- TODO nfbtoo?
+  return $ "(SBind: " ++ atab ++ " " ++ nfa ++ ")"
 showO (PRINTED s) = s
 
--- showO (NBE nfa) = showNF nfa
--- showO (SIf b t e) = "if"
--- showO (SRet nfatoo nfa) = showO (nfatoo nfa)
--- showO (SBind atatob nfa nfbtoo) = "\varb." ++ showNF nfa ++ showO (nfbtoo (NAny (AVar "varb")))
+-- \v0.if v0 then 42 else 42
+booltest = bla (Arr Boolean IntT) (Lam (\x -> (Var (VInt 42))))
