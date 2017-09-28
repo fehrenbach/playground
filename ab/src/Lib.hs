@@ -72,12 +72,6 @@ nextName = do
 evalGen :: Gen a -> Int -> a
 evalGen = evalState
 
-class Monad m => Residualising m where
-  gamma :: Gen a -> m a
-  collect :: m Exp -> Gen Exp
-  bind :: Exp -> m Var
-  binds :: Exp -> m (Either Var Var)
-
 type Env a = [(Var, a)]
 
 empty :: Env a
@@ -114,46 +108,6 @@ eval env (Case e x1 e1 x2 e2) = do
     Left v -> eval (extend env x1 v) e1
     Right v -> eval (extend env x2 v) e2
 
-
-reifyC :: Ty -> SemC -> Gen Exp
-reifyC a c = collect (do v <- c; gamma (reifyV a v))
-
-reifyV :: Ty -> SemV -> Gen Exp
-reifyV A (Neutral e) = return e
-reifyV B (Neutral e) = return e
-reifyV C (Neutral e) = return e
-reifyV (ArrT a b) (Fun f) = do
-  x <- nextName
-  e <- reifyC b (do v <- reflectV a x; f v)
-  return $ Lam x e
-reifyV (SumT a b) (Sum (Left v)) = do
-  e <- reifyV a v
-  return $ Inl e
-reifyV (SumT a b) (Sum (Right v)) = do
-  e <- reifyV a v
-  return $ Inr e
-
-reflectV :: Ty -> Var -> SemC
-reflectV A x = return (Neutral (Var x))
-reflectV B x = return (Neutral (Var x))
-reflectV C x = return (Neutral (Var x))
-reflectV (ArrT a b) x =
-  return (Fun (\v -> do e <- gamma (reifyV a v); reflectC b x e))
-reflectV (SumT a b) x = do
-  v <- binds (Var x)
-  case v of
-    Left x1 -> do v1 <- reflectV a x1
-                  return (Sum (Left v1))
-    Right x2 -> do v2 <- reflectV b x2
-                   return (Sum (Right v2))
-
-reflectC :: Ty -> Var -> Exp -> SemC
-reflectC a x e = do
-  x <- bind (App (Var x) e)
-  reflectV a x
-
-norm :: Ty -> Hoas -> Exp
-norm a e = evalGen (reifyC a (eval empty (hoasToExp e))) 0
 
 data Acc a = Val a
            | LetB Var Exp (Acc a)
@@ -197,14 +151,62 @@ instance Monad GenAcc where
                t2 <- unGA (GA (return m2) >>= k)
                return (CaseB e x1 t1 x2 t2))
 
-instance Residualising GenAcc where
-  gamma f = GA (do v <- f; return (return v))
-  collect (GA f) = do t <- f; return (flatten t)
-  bind e = GA (do x <- nextName; return $ LetB x e (Val x))
-  binds e = GA $ do
-    x1 <- nextName
-    x2 <- nextName
-    return $ CaseB e x1 (Val (Left x1)) x2 (Val (Left x2))
+gamma :: Gen a -> GenAcc a
+gamma f = GA (do v <- f; return (return v))
+
+collect :: GenAcc Exp -> Gen Exp
+collect (GA f) = do t <- f; return (flatten t)
+
+bind :: Exp -> GenAcc Var
+bind e = GA (do x <- nextName; return $ LetB x e (Val x))
+
+binds :: Exp -> GenAcc (Either Var Var)
+binds e = GA $ do
+  x1 <- nextName
+  x2 <- nextName
+  return $ CaseB e x1 (Val (Left x1)) x2 (Val (Left x2))
+
+
+reifyC :: Ty -> SemC -> Gen Exp
+reifyC a c = collect (do v <- c; gamma (reifyV a v))
+
+reifyV :: Ty -> SemV -> Gen Exp
+reifyV A (Neutral e) = return e
+reifyV B (Neutral e) = return e
+reifyV C (Neutral e) = return e
+reifyV (ArrT a b) (Fun f) = do
+  x <- nextName
+  e <- reifyC b (do v <- reflectV a x; f v)
+  return $ Lam x e
+reifyV (SumT a b) (Sum (Left v)) = do
+  e <- reifyV a v
+  return $ Inl e
+reifyV (SumT a b) (Sum (Right v)) = do
+  e <- reifyV a v
+  return $ Inr e
+
+reflectV :: Ty -> Var -> SemC
+reflectV A x = return (Neutral (Var x))
+reflectV B x = return (Neutral (Var x))
+reflectV C x = return (Neutral (Var x))
+reflectV (ArrT a b) x =
+  return (Fun (\v -> do e <- gamma (reifyV a v); reflectC b x e))
+reflectV (SumT a b) x = do
+  v <- binds (Var x)
+  case v of
+    Left x1 -> do v1 <- reflectV a x1
+                  return (Sum (Left v1))
+    Right x2 -> do v2 <- reflectV b x2
+                   return (Sum (Right v2))
+
+reflectC :: Ty -> Var -> Exp -> SemC
+reflectC a x e = do
+  x <- bind (App (Var x) e)
+  reflectV a x
+
+norm :: Ty -> Hoas -> Exp
+norm a e = evalGen (reifyC a (eval empty (hoasToExp e))) 0
+
 
 ex1 = norm (ArrT A A) (lam (\x -> x))
 ex2 = norm (ArrT (ArrT A A) (ArrT A A)) (lam (\x -> x))
