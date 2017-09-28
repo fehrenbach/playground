@@ -152,8 +152,8 @@ reflectC a x e = do
   x <- bind (App (Var x) e)
   reflectV a x
 
-normU :: Ty -> Hoas -> Exp
-normU a e = evalGen (reifyC a (eval empty (hoasToExp e))) 0
+norm :: Ty -> Hoas -> Exp
+norm a e = evalGen (reifyC a (eval empty (hoasToExp e))) 0
 
 data Acc a = Val a
            | LetB Var Exp (Acc a)
@@ -206,8 +206,6 @@ instance Residualising GenAcc where
     x2 <- nextName
     return $ CaseB e x1 (Val (Left x1)) x2 (Val (Left x2))
 
-normAccU = normU
-
-ex1 = normAccU (ArrT A A) (lam (\x -> x))
-ex2 = normAccU (ArrT (ArrT A A) (ArrT A A)) (lam (\x -> x))
-ex3 = normAccU (ArrT (SumT A B) (SumT A B)) (lam (\x -> x))
+ex1 = norm (ArrT A A) (lam (\x -> x))
+ex2 = norm (ArrT (ArrT A A) (ArrT A A)) (lam (\x -> x))
+ex3 = norm (ArrT (SumT A B) (SumT A B)) (lam (\x -> x))
