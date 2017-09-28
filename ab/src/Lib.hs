@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveFunctor, FlexibleInstances, GADTs, KindSignatures, MultiParamTypeClasses, RankNTypes, StandaloneDeriving, TypeSynonymInstances #-}
+{-# LANGUAGE DeriveFunctor, FlexibleContexts, FlexibleInstances, GADTs, KindSignatures, MultiParamTypeClasses, RankNTypes, StandaloneDeriving, TypeSynonymInstances #-}
 
 module Lib where
 
@@ -94,7 +94,7 @@ class SumInt v where
   injSum :: Either v v -> v
   projSum :: v -> Either v v
 
-eval :: (Monad m, FunInt a m, SumInt a) => Env a -> Exp -> m a
+eval :: (FunInt a GenAcc, SumInt a) => Env a -> Exp -> GenAcc a
 eval env (Var x) = return (fromJust (lookup x env))
 eval env (Lam x e) = injFun (\v -> eval (extend env x v) e)
 eval env (App e1 e2) = do
@@ -116,26 +116,24 @@ eval env (Case e x1 e1 x2 e2) = do
     Left v -> eval (extend env x1 v) e1
     Right v -> eval (extend env x2 v) e2
 
-data SemV m = Neutral Exp
-            | Fun (SemV m -> SemC m)
-            | Sum (Either (SemV m) (SemV m))
+data SemV = Neutral Exp
+          | Fun (SemV -> SemC)
+          | Sum (Either SemV SemV)
 
-type SemC m = m (SemV m)
+type SemC = GenAcc SemV
 
-instance Residualising m => FunInt (SemV m) m where
+instance FunInt SemV GenAcc where
   injFun f = return (Fun f)
   projFun (Fun f) = f
 
-instance Residualising m => SumInt (SemV m) where
+instance SumInt SemV where
   injSum = Sum
   projSum (Sum s) = s
 
-type ResEval m = Env (SemV m) -> Exp -> SemC m
-
-reifyC :: Residualising m => Ty -> SemC m -> Gen Exp
+reifyC :: Ty -> SemC -> Gen Exp
 reifyC a c = collect (do v <- c; gamma (reifyV a v))
 
-reifyV :: Residualising m => Ty -> SemV m -> Gen Exp
+reifyV :: Ty -> SemV -> Gen Exp
 reifyV A (Neutral e) = return e
 reifyV B (Neutral e) = return e
 reifyV C (Neutral e) = return e
@@ -150,7 +148,7 @@ reifyV (SumT a b) (Sum (Right v)) = do
   e <- reifyV a v
   return $ Inr e
 
-reflectV :: Residualising m => Ty -> Var -> SemC m
+reflectV :: Ty -> Var -> SemC
 reflectV A x = return (Neutral (Var x))
 reflectV B x = return (Neutral (Var x))
 reflectV C x = return (Neutral (Var x))
@@ -164,13 +162,13 @@ reflectV (SumT a b) x = do
     Right x2 -> do v2 <- reflectV b x2
                    return (Sum (Right v2))
 
-reflectC :: Residualising m => Ty -> Var -> Exp -> SemC m
+reflectC :: Ty -> Var -> Exp -> SemC
 reflectC a x e = do
   x <- bind (App (Var x) e)
   reflectV a x
 
-normU :: Residualising m => ResEval m -> Ty -> Hoas -> Exp
-normU eval a e = evalGen (reifyC a (eval empty (hoasToExp e))) 0
+normU :: Ty -> Hoas -> Exp
+normU a e = evalGen (reifyC a (eval empty (hoasToExp e))) 0
 
 data Acc a = Val a
            | LetB Var Exp (Acc a)
@@ -223,7 +221,7 @@ instance Residualising GenAcc where
     x2 <- nextName
     return $ CaseB e x1 (Val (Left x1)) x2 (Val (Left x2))
 
-normAccU = normU (eval :: ResEval GenAcc)
+normAccU = normU
 
 ex1 = normAccU (ArrT A A) (lam (\x -> x))
 ex2 = normAccU (ArrT (ArrT A A) (ArrT A A)) (lam (\x -> x))
