@@ -7,6 +7,13 @@ import Data.Maybe (fromJust)
 
 type Var = String
 
+data Ty
+  = A
+  | B
+  | C
+  | ArrT Ty Ty
+  | SumT Ty Ty
+
 data Exp
   = Var Var
   | Lam Var Exp
@@ -64,30 +71,6 @@ nextName = do
 
 evalGen :: Gen a -> Int -> a
 evalGen = evalState
-
-data A
-data B
-data C
-
-data Rep :: * -> * where
-  A :: Rep A
-  B :: Rep B
-  C :: Rep C
-  ArrT :: Rep a -> Rep b -> Rep (a -> b)
-  SumT :: Rep a -> Rep b -> Rep (Either a b)
-
-class Representable a where
-  rep :: Rep a
-
-instance Representable A where rep = A
-instance Representable B where rep = B
-instance Representable C where rep = C
-
-instance (Representable a, Representable b) => Representable (a -> b) where
-  rep = ArrT rep rep
-
-instance (Representable a, Representable b) => Representable (Either a b) where
-  rep = SumT rep rep
 
 class Monad m => Residualising m where
   gamma :: Gen a -> m a
@@ -149,10 +132,10 @@ instance Residualising m => SumInt (SemV m) where
 
 type ResEval m = Env (SemV m) -> Exp -> SemC m
 
-reifyC :: Residualising m => Rep a -> SemC m -> Gen Exp
+reifyC :: Residualising m => Ty -> SemC m -> Gen Exp
 reifyC a c = collect (do v <- c; gamma (reifyV a v))
 
-reifyV :: Residualising m => Rep a -> SemV m -> Gen Exp
+reifyV :: Residualising m => Ty -> SemV m -> Gen Exp
 reifyV A (Neutral e) = return e
 reifyV B (Neutral e) = return e
 reifyV C (Neutral e) = return e
@@ -167,7 +150,7 @@ reifyV (SumT a b) (Sum (Right v)) = do
   e <- reifyV a v
   return $ Inr e
 
-reflectV :: Residualising m => Rep a -> Var -> SemC m
+reflectV :: Residualising m => Ty -> Var -> SemC m
 reflectV A x = return (Neutral (Var x))
 reflectV B x = return (Neutral (Var x))
 reflectV C x = return (Neutral (Var x))
@@ -181,12 +164,12 @@ reflectV (SumT a b) x = do
     Right x2 -> do v2 <- reflectV b x2
                    return (Sum (Right v2))
 
-reflectC :: Residualising m => Rep a -> Var -> Exp -> SemC m
+reflectC :: Residualising m => Ty -> Var -> Exp -> SemC m
 reflectC a x e = do
   x <- bind (App (Var x) e)
   reflectV a x
 
-normU :: Residualising m => ResEval m -> Rep a -> Hoas -> Exp
+normU :: Residualising m => ResEval m -> Ty -> Hoas -> Exp
 normU eval a e = evalGen (reifyC a (eval empty (hoasToExp e))) 0
 
 data Acc a = Val a
@@ -242,6 +225,6 @@ instance Residualising GenAcc where
 
 normAccU = normU (eval :: ResEval GenAcc)
 
-ex1 = normAccU (rep :: Rep (A -> A)) (lam (\x -> x))
-ex2 = normAccU (rep :: Rep ((A -> A) -> (A -> A))) (lam (\x -> x))
-ex3 = normAccU (rep :: Rep (Either A B -> Either A B)) (lam (\x -> x))
+ex1 = normAccU (ArrT A A) (lam (\x -> x))
+ex2 = normAccU (ArrT (ArrT A A) (ArrT A A)) (lam (\x -> x))
+ex3 = normAccU (ArrT (SumT A B) (SumT A B)) (lam (\x -> x))
