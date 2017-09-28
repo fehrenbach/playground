@@ -86,49 +86,34 @@ empty = []
 extend :: Env a -> Var -> a -> Env a
 extend env x v = (x, v) : env
 
-class FunInt v m where
-  injFun :: (v -> m v) -> m v
-  projFun :: v -> (v -> m v)
-
-class SumInt v where
-  injSum :: Either v v -> v
-  projSum :: v -> Either v v
-
-eval :: (FunInt a GenAcc, SumInt a) => Env a -> Exp -> GenAcc a
-eval env (Var x) = return (fromJust (lookup x env))
-eval env (Lam x e) = injFun (\v -> eval (extend env x v) e)
-eval env (App e1 e2) = do
-  v1 <- eval env e1
-  v2 <- eval env e2
-  projFun v1 v2
-eval env (Let x e1 e2) = do
-  v <- eval env e1
-  eval (extend env x v) e2
-eval env (Inl e) = do
-  v <- eval env e
-  return (injSum (Left v))
-eval env (Inr e) = do
-  v <- eval env e
-  return (injSum (Right v))
-eval env (Case e x1 e1 x2 e2) = do
-  v <- eval env e
-  case projSum v of
-    Left v -> eval (extend env x1 v) e1
-    Right v -> eval (extend env x2 v) e2
-
 data SemV = Neutral Exp
           | Fun (SemV -> SemC)
           | Sum (Either SemV SemV)
 
 type SemC = GenAcc SemV
 
-instance FunInt SemV GenAcc where
-  injFun f = return (Fun f)
-  projFun (Fun f) = f
+eval :: Env SemV -> Exp -> GenAcc SemV
+eval env (Var x) = return (fromJust (lookup x env))
+eval env (Lam x e) = return (Fun (\v -> eval (extend env x v) e))
+eval env (App e1 e2) = do
+  Fun v1 <- eval env e1
+  v2 <- eval env e2
+  v1 v2
+eval env (Let x e1 e2) = do
+  v <- eval env e1
+  eval (extend env x v) e2
+eval env (Inl e) = do
+  v <- eval env e
+  return (Sum (Left v))
+eval env (Inr e) = do
+  v <- eval env e
+  return (Sum (Right v))
+eval env (Case e x1 e1 x2 e2) = do
+  Sum v <- eval env e
+  case v of
+    Left v -> eval (extend env x1 v) e1
+    Right v -> eval (extend env x2 v) e2
 
-instance SumInt SemV where
-  injSum = Sum
-  projSum (Sum s) = s
 
 reifyC :: Ty -> SemC -> Gen Exp
 reifyC a c = collect (do v <- c; gamma (reifyV a v))
