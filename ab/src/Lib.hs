@@ -269,3 +269,6 @@ vsumT a b = VarT [("Left", a), ("Right", b)]
 
 ex4 = norm (ArrT (vsumT A B) (vsumT A B)) (lam (\x -> x))
 ex5 = norm (ArrT (VarT [("Left", A), ("Middle", B), ("Right", C)]) (VarT [("Left", A), ("Middle", B), ("Right", C)])) (lam (\x -> x))
+
+ex6 = norm (ArrT A A) (app (lam (\x -> cases x [("Left", (\y -> (lam (\x -> x)))), ("Middle", (\w -> w))])) (tag "Middle" (lam (\z -> z))))
+
