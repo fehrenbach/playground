@@ -21,6 +21,8 @@ data Ty
   | ArrT Ty Ty
   | SumT Ty Ty
   | VarT [(Label, Ty)]
+  | ListT Ty
+  deriving (Show)
 
 data Exp
   = Var Var
@@ -32,6 +34,10 @@ data Exp
   | Tag Label Exp
   | Cases Exp [(Label, Var, Exp)]
   | Let Var Exp Exp
+  | For Var Exp Exp
+  | Lst [Exp]
+  -- | Nil
+  -- | Cons Exp Exp
   deriving (Show)
 
 class CompLam exp where
@@ -43,6 +49,10 @@ class CompLam exp where
   tag :: Label -> exp -> exp
   cases :: exp -> [(Label, exp -> exp)] -> exp
   let_ :: exp -> (exp -> exp) -> exp
+  for :: exp -> (exp -> exp) -> exp
+  lst :: [exp] -> exp
+  -- nil :: exp
+  -- cons :: exp -> exp -> exp
 
 type Hoas = forall exp. CompLam exp => exp
 
@@ -60,6 +70,9 @@ instance CompLam (Gen Exp) where
     return $ App e1 e2
   inl v = do e <- v; return $ Inl e
   inr v = do e <- v; return $ Inr e
+  lst vs = do es <- sequence vs; return $ Lst es
+  -- nil = return $ Nil
+  -- cons x xs = do x <- x; xs <- xs; return $ Cons x xs
   case_ v l r = do
     e <- v
     x1 <- nextName
@@ -79,6 +92,11 @@ instance CompLam (Gen Exp) where
     x <- nextName
     e' <- f (return (Var x))
     return $ Let x e e'
+  for v f = do
+    i <- v
+    x <- nextName
+    o <- f (return (Var x))
+    return $ For x i o
 
 type Gen = State Int
 
@@ -102,7 +120,8 @@ extend env x v = (x, v) : env
 data SemV = Neutral Exp
           | Fun (SemV -> SemC)
           | Sum (Either SemV SemV)
-          | Tagged Label SemV 
+          | Tagged Label SemV
+          | List [SemV]
 
 type SemC = GenAcc SemV
 
@@ -116,6 +135,10 @@ eval env (App e1 e2) = do
 eval env (Let x e1 e2) = do
   v <- eval env e1
   eval (extend env x v) e2
+eval env (For x i o) = do
+  List is <- eval env i
+  os <- traverse (\v -> eval (extend env x v) o) is
+  return (List (concat (map (\(List o) -> o) os)))
 eval env (Inl e) = do
   v <- eval env e
   return (Sum (Left v))
@@ -135,9 +158,13 @@ eval env (Cases e cs) = do
   case lookup3 t cs of
     Just (x, e) -> eval (extend env x v) e
     Nothing -> error "case not found"
+eval env (Lst es) = do
+  es <- traverse (eval env) es
+  return (List es)
 
 data Acc a = Val a
            | LetB Var Exp (Acc a)
+           | ForB Var Exp (Acc a)
            | CaseB Exp Var (Acc a) Var (Acc a)
            | CasesB Exp [(Label, Var, Acc a)]
   deriving (Functor)
@@ -150,12 +177,14 @@ instance Monad Acc where
   return = Val
   Val v >>= f = f v
   LetB x e m >>= f = LetB x e (m >>= f)
+  ForB x i o >>= f = ForB x i (o >>= f)
   CaseB e x1 m1 x2 m2 >>= f = CaseB e x1 (m1 >>= f) x2 (m2 >>= f)
   CasesB e cs >>= f = CasesB e (map (\(l, x, m) -> (l, x, m >>= f)) cs)
 
 flatten :: Acc Exp -> Exp
 flatten (Val e) = e
 flatten (LetB x e t) = Let x e (flatten t)
+flatten (ForB x i o) = For x i (flatten o)
 flatten (CaseB v x1 t1 x2 t2) =
   Case v x1 (flatten t1) x2 (flatten t2)
 flatten (CasesB v cs) =
@@ -178,6 +207,9 @@ instance Monad GenAcc where
              LetB x e m -> do
                t <- unGA (GA (return m) >>= k)
                return (LetB x e t)
+             ForB x e m -> do
+               t <- unGA (GA (return m) >>= k)
+               return (ForB x e t)
              CaseB e x1 m1 x2 m2 -> do
                t1 <- unGA (GA (return m1) >>= k)
                t2 <- unGA (GA (return m2) >>= k)
@@ -232,6 +264,9 @@ reifyV (VarT as) (Tagged l v) =
     Just a -> do
       e <- reifyV a v
       return $ Tag l e
+reifyV (ListT a) (List es) = do
+  es <- traverse (reifyV a) es
+  return $ Lst es
 
 reflectV :: Ty -> Var -> SemC
 reflectV A x = return (Neutral (Var x))
@@ -252,6 +287,12 @@ reflectV (VarT as) x = do
     Just a -> do
       v <- reflectV a x
       return (Tagged l v)
+reflectV (ListT a) x = do
+  v <- GA $ do
+    x' <- nextName
+    return $ ForB x' (Var x) (Val x')
+  uh <- reflectV a v
+  return (List [uh])
 
   
 reflectC :: Ty -> Var -> Exp -> SemC
@@ -274,3 +315,5 @@ ex5 = norm (ArrT (VarT [("Left", A), ("Middle", B), ("Right", C)]) (VarT [("Left
 
 ex6 = norm (ArrT A A) (app (lam (\x -> cases x [("Left", (\y -> (lam (\x -> x)))), ("Middle", (\w -> w))])) (tag "Middle" (lam (\z -> z))))
 
+ex7 = norm (ArrT A (ListT A)) (lam (\x -> lst [x, x]))
+ex8 = norm (ArrT (ListT A) (ListT A)) (app (lam (\x -> x)) (lam (\x -> for x (\y -> lst [y, y]))))
