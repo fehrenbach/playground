@@ -2,6 +2,7 @@
 
 module Lib where
 
+import Control.Monad (ap)
 import Control.Monad.Trans.State.Strict
 import Data.Maybe (fromJust)
 
@@ -142,8 +143,8 @@ data Acc a = Val a
   deriving (Functor)
 
 instance Applicative Acc where
-  pure = Val
-  -- (<*>) = _
+  pure = return
+  (<*>) = ap
 
 instance Monad Acc where
   return = Val
@@ -165,7 +166,8 @@ newtype GenAcc a = GA {unGA :: Gen (Acc a)}
 deriving instance Functor GenAcc
 
 instance Applicative GenAcc where
-  pure = GA . pure . pure
+  pure = return
+  (<*>) = ap
 
 instance Monad GenAcc where
   return = GA . return . return
