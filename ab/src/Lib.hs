@@ -1,5 +1,8 @@
 {-# LANGUAGE DeriveFunctor, FlexibleContexts, FlexibleInstances, GADTs, KindSignatures, MultiParamTypeClasses, RankNTypes, StandaloneDeriving, TupleSections, TypeSynonymInstances #-}
 
+-- Accumulating bindings. Sam Lindley.
+-- In the proceedings of 2009 Workshop on Normalization by Evaluation.
+
 module Lib where
 
 import Control.Monad (ap)
