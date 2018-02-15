@@ -21,9 +21,10 @@ description:         Please see the README on Github at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
+- ansi-wl-pprint
 - bound
 - deriving-compat
-- ansi-wl-pprint
+- mmorph
 
 library:
   source-dirs: src
