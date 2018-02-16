@@ -255,7 +255,11 @@ trace (EVariant _ _) = error "cannot trace variant constructor"
 trace EEmptyList = elam "t" (ttype (CVar "??")) EEmptyList
 trace (ESingletonList e) = elam "t" (ttype (CVar "??")) (ESingletonList (EApp (trace e) (EVar "t")))
 trace (EConcat l r) = elam "t" (ttype (CVar "??")) (EConcat (efor "l" (EApp (trace l) (EVar "t")) (ESingletonList (EVar "l"))) (efor "r" (EApp (trace r) (EVar "t")) (ESingletonList (EVar "r"))))
-trace (EFor i o) = EVar "NoIdea"
+trace (EFor i o) = -- not sure this makes any sense
+ elam "t" (ttype (CVar "??")) $
+  efor "i" (EApp (trace i) (elam "x" (TT (CVar "???")) (EVar "x"))) $ {- TODO replace by proper identity function -}
+    (EApp (trace (instantiate (const (EVar "i")) o))
+      (elam "o" (TT (CVar "????")) (EApp (EVar "t") (EVariant "For" (EVar "o")))))
 
 betaReduce :: Eq x => Monad c => Expr c x a -> Expr c x a
 betaReduce ETrue = ETrue
@@ -292,7 +296,16 @@ someFunc = do
   putStrLn ""
   putDoc $ prettyExpr (evars, tvars) False (trace (EConcat (ESingletonList ETrue) EEmptyList))
   putStrLn ""
+  putDoc $ prettyExpr (evars, tvars) False $ efor "x" (EVar "inList") (ESingletonList (EVar "x"))
+  putStrLn ""
   putDoc $ prettyExpr (evars, tvars) False (trace (efor "x" (EVar "inList") (ESingletonList (EVar "x"))))
   putStrLn ""
   putDoc $ prettyExpr (evars, tvars) False ((betaReduce . betaReduce . betaReduce) (trace (efor "x" (EVar "inList") (ESingletonList (EVar "x")))))
   putStrLn ""
+  putDoc $ prettyExpr (evars, tvars) False (efor "x" (EVar "as") (efor "y" (EVar "bs") (EConcat (ESingletonList (EVar "x")) (ESingletonList (EVar "y")))))
+  putStrLn ""
+  putDoc $ prettyExpr (evars, tvars) False (trace (efor "x" (EVar "as") (efor "y" (EVar "bs") (EConcat (ESingletonList (EVar "x")) (ESingletonList (EVar "y"))))))
+  putStrLn ""
+  putDoc $ prettyExpr (evars, tvars) False ((betaReduce . betaReduce . betaReduce . betaReduce . betaReduce . betaReduce)  (trace (efor "x" (EVar "xs") (efor "y" (EVar "ys") (EConcat (ESingletonList (EVar "x")) (ESingletonList (EVar "y")))))))
+  putStrLn ""
+  
