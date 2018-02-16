@@ -23,12 +23,17 @@ prettyKind :: Kind -> Doc
 prettyKind KType = text "Type"
 prettyKind (KArrow l r) = parens $ prettyKind l <+> text "->" <+> prettyKind r 
 
+type Label = String
+
 data Constructor a
   = CBool
   | CVar a
   | CLambda Kind (Scope () Constructor a)
   | CApp (Constructor a) (Constructor a)
   | CList (Constructor a)
+  -- I don't really want another datatype
+  | CRowNil
+  | CRowCons Label (Constructor a) (Constructor a)
   deriving (Functor)
 
 deriveEq1 ''Constructor
@@ -45,6 +50,8 @@ instance Monad Constructor where
   CLambda k b >>= f = CLambda k (b >>>= f)
   CApp a b >>= f = CApp (a >>= f) (b >>= f)
   CList a >>= f = CList (a >>= f)
+  CRowNil >>= _ = CRowNil
+  CRowCons l c r >>= f = CRowCons l (c >>= f) (r >>= f)
 
 clam :: Eq a => a -> Kind -> Constructor a -> Constructor a
 clam a k b = CLambda k (abstract1 a b)
@@ -113,8 +120,6 @@ tInstantiate1 = go instantiate1
     go f a (TArrow l r) = TArrow (go f a l) (go f a r)
     go f a (TList t) = TList (go f a t)
 
-type Label = String
-
 data Expr c a x
   = ETrue
   | EVar x
@@ -126,6 +131,8 @@ data Expr c a x
   | ESingletonList (Expr c a x)
   | EConcat (Expr c a x) (Expr c a x)
   | EFor {- (Type c a) -} (Expr c a x) (Scope () (Expr c a) x)
+  | EEmptyRecord
+  | ERecordExt Label (Expr c a x) (Expr c a x)
   deriving (Functor)
 
 instance (Eq a, Monad c) => Applicative (Expr c a) where
@@ -145,6 +152,8 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   EEmptyList >>= _ = EEmptyList
   ESingletonList e >>= f = ESingletonList (e >>= f)
   EConcat l r >>= f = EConcat (l >>= f) (r >>= f)
+  EEmptyRecord >>= _ = EEmptyRecord
+  ERecordExt l x r >>= f = ERecordExt l (x >>= f) (r >>= f)
 
 liftCE :: Monad c => Expr c a b -> Expr (Scope () c) a b
 liftCE ETrue = ETrue
@@ -158,7 +167,6 @@ liftCE EEmptyList = EEmptyList
 liftCE (ESingletonList e) = ESingletonList (liftCE e)
 liftCE (EConcat l r) = EConcat (liftCE l) (liftCE r)
 
-
 liftCT :: Monad c => Type c a -> Type (Scope () c) a
 liftCT TBool = TBool
 liftCT (TT c) = TT (lift c)
@@ -171,6 +179,10 @@ elam x t b = ELam t (abstract1 x b)
 
 efor :: Eq x => x -> Expr c a x -> Expr c a x -> Expr c a x
 efor x i o = EFor i (abstract1 x o)
+
+record :: [(Label, Expr c a x)] -> Expr c a x
+record [] = EEmptyRecord
+record ((l, x) : r) = ERecordExt l x (record r)
 
 idA :: Expr Constructor String String
 idA = elam "ex" (TT (CVar "a")) (EVar "ex")
@@ -225,8 +237,13 @@ prettyExpr ns p EEmptyList = text "[]"
 prettyExpr ns p (ESingletonList e) = brackets $ prettyExpr ns False e
 prettyExpr ns p (EConcat l r) = pparens p $ prettyExpr ns True l <+> text "++" <+> prettyExpr ns True r
 prettyExpr (v:vs, tvs) p (EFor i o) = pparens p $ hang 2 $
-  text "for" <+> parens (text v <+> text "<-" <+> prettyExpr (v:vs, tvs) False i) </> prettyExpr (vs, tvs) False (instantiate1 (EVar v) o)
+  bold (text "for") <+> parens (text v <+> text "<-" <+> prettyExpr (v:vs, tvs) False i) </> prettyExpr (vs, tvs) False (instantiate1 (EVar v) o)
+prettyExpr ns p EEmptyRecord = braces empty
+prettyExpr ns p r@(ERecordExt _ _ _) = braces $ align $ printRecord ns r
 
+printRecord ns EEmptyRecord = empty
+printRecord ns (ERecordExt l x EEmptyRecord) = blue (text l) <+> char '=' <+> prettyExpr ns False x
+printRecord ns (ERecordExt l x r) = blue (text l) <+> char '=' <+> prettyExpr ns False x <> char ',' </> printRecord ns r
 
 {-
 
@@ -259,7 +276,7 @@ trace (EFor i o) = -- not sure this makes any sense
  elam "t" (ttype (CVar "??")) $
   efor "i" (EApp (trace i) (elam "x" (TT (CVar "???")) (EVar "x"))) $ {- TODO replace by proper identity function -}
     (EApp (trace (instantiate (const (EVar "i")) o))
-      (elam "o" (TT (CVar "????")) (EApp (EVar "t") (EVariant "For" (EVar "o")))))
+      (elam "o" (TT (CVar "????")) (EApp (EVar "t") (EVariant "For" (record [("in", EVar "i"), ("out", EVar "o")])))))
 
 betaReduce :: Eq x => Monad c => Expr c x a -> Expr c x a
 betaReduce ETrue = ETrue
@@ -276,36 +293,35 @@ betaReduce (EFor i o) = EFor (betaReduce i) (hoistScope betaReduce o)
 
 someFunc :: IO ()
 someFunc = do
-  putDoc $ prettyConstructor tvars False (CApp (clam "x" KType (CVar "x")) (clam "y" KType CBool))
-  putStrLn ""
-  putDoc $ prettyType tvars False test
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False idA
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False polyId
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace ETrue)
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace (EVar "foo"))
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace EEmptyList)
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace (ESingletonList ETrue))
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace (ESingletonList (ESingletonList ETrue)))
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace (EConcat (ESingletonList ETrue) EEmptyList))
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False $ efor "x" (EVar "inList") (ESingletonList (EVar "x"))
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace (efor "x" (EVar "inList") (ESingletonList (EVar "x"))))
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False ((betaReduce . betaReduce . betaReduce) (trace (efor "x" (EVar "inList") (ESingletonList (EVar "x")))))
-  putStrLn ""
+  -- putDoc $ prettyConstructor tvars False (CApp (clam "x" KType (CVar "x")) (clam "y" KType CBool))
+  -- putStrLn ""
+  -- putDoc $ prettyType tvars False test
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False idA
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False polyId
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False (trace ETrue)
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False (trace (EVar "foo"))
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False (trace EEmptyList)
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False (trace (ESingletonList ETrue))
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False (trace (ESingletonList (ESingletonList ETrue)))
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False (trace (EConcat (ESingletonList ETrue) EEmptyList))
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False $ efor "x" (EVar "inList") (ESingletonList (EVar "x"))
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False (trace (efor "x" (EVar "inList") (ESingletonList (EVar "x"))))
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False ((betaReduce . betaReduce . betaReduce) (trace (efor "x" (EVar "inList") (ESingletonList (EVar "x")))))
+  -- putStrLn ""
   putDoc $ prettyExpr (evars, tvars) False (efor "x" (EVar "as") (efor "y" (EVar "bs") (EConcat (ESingletonList (EVar "x")) (ESingletonList (EVar "y")))))
   putStrLn ""
   putDoc $ prettyExpr (evars, tvars) False (trace (efor "x" (EVar "as") (efor "y" (EVar "bs") (EConcat (ESingletonList (EVar "x")) (ESingletonList (EVar "y"))))))
   putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False ((betaReduce . betaReduce . betaReduce . betaReduce . betaReduce . betaReduce)  (trace (efor "x" (EVar "xs") (efor "y" (EVar "ys") (EConcat (ESingletonList (EVar "x")) (ESingletonList (EVar "y")))))))
+  putDoc $ prettyExpr (evars, tvars) False ((betaReduce . betaReduce . betaReduce . betaReduce . betaReduce . betaReduce . betaReduce . betaReduce)  (EApp (trace (efor "x" (EVar "xs") (efor "y" (EVar "ys") (EConcat (ESingletonList (EVar "x")) (ESingletonList (EVar "y")))))) idA))
   putStrLn ""
-  
