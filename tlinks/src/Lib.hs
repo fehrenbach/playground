@@ -12,6 +12,11 @@ import Data.Functor.Classes (Eq1)
 import Data.Deriving (deriveEq1)
 import Text.PrettyPrint.ANSI.Leijen
 
+-- I'm sure there's a better way to do this, but my hoogle-fu is insufficient
+mapSnd :: (a -> b) -> [(l, a)] -> [(l, b)]
+mapSnd _ [] = []
+mapSnd f ((a,b):r) = (a, f b) : mapSnd f r
+
 pparens :: Bool -> Doc -> Doc
 pparens True d = black (char '(') <> d <> black (char ')')
 pparens False d = d
@@ -167,6 +172,7 @@ liftCE EEmptyList = EEmptyList
 liftCE (ESingletonList e) = ESingletonList (liftCE e)
 liftCE (EConcat l r) = EConcat (liftCE l) (liftCE r)
 liftCE (EIf i t e) = EIf (liftCE i) (liftCE t) (liftCE e)
+liftCE (ERecord l) = ERecord (mapSnd liftCE l)
 
 liftCT :: Monad c => Type c a -> Type (Scope () c) a
 liftCT TBool = TBool
@@ -201,7 +207,8 @@ eInstantiateC1 a (EVariant l e) = EVariant l (eInstantiateC1 a e)
 eInstantiateC1 a (ESingletonList e) = ESingletonList (eInstantiateC1 a e)
 eInstantiateC1 a (EConcat l r) = EConcat (eInstantiateC1 a l) (eInstantiateC1 a r)
 eInstantiateC1 a (EFor i o) = EFor (eInstantiateC1 a i) (hoistScope (eInstantiateC1 a) o)
-
+eInstantiateC1 a (EIf c t e) = EIf (eInstantiateC1 a c) (eInstantiateC1 a t) (eInstantiateC1 a e)
+eInstantiateC1 a (ERecord l) = ERecord (mapSnd (eInstantiateC1 a) l)
 
 -- abstract over a constructor in an expression
 eAbstractC1 :: Eq a => Functor c => a -> Expr c a x -> Expr (Scope () c) a x
@@ -215,6 +222,8 @@ eAbstractC1 a (EVariant l e) = EVariant l (eAbstractC1 a e)
 eAbstractC1 a (ESingletonList e) = ESingletonList (eAbstractC1 a e)
 eAbstractC1 a (EConcat l r) = EConcat (eAbstractC1 a l) (eAbstractC1 a r)
 eAbstractC1 a (EFor i o) = EFor (eAbstractC1 a i) (hoistScope (eAbstractC1 a) o)
+eAbstractC1 a (EIf c t e) = EIf (eAbstractC1 a c) (eAbstractC1 a t) (eAbstractC1 a e)
+eAbstractC1 a (ERecord l) = ERecord (mapSnd (eAbstractC1 a) l)
 
 etlam :: Eq a => Monad c => a -> Kind -> Expr c a x -> Expr c a x
 etlam a k b = ETLam k (eAbstractC1 a b) -- this should be actual abstract, not my misnamed one, I think
@@ -267,52 +276,41 @@ evars = ["x", "y", "z"] <> [ "x" <> show x | x <- [0..] ]
 ttype :: Constructor String -> Type Constructor String
 ttype c = TArrow (TT (CApp (CVar "TRACE") c)) (TT (CApp (CVar "TRACE") c))
 
--- trace :: Expr Constructor String String -> Expr Constructor String String
-trace' :: Type c a -> Expr c a x -> Expr c a x
-trace' ct ETrue = ELam ct $ toScope (EApp (EVar (B ())) (EVariant "Lit" ETrue))
-trace' ct (EVar x) = ELam ct $ toScope (EApp (EVar (B ())) (EVar (F x)))
-trace' _ (ETLam _ _) = error "cannot trace Lambda"
-trace' _ (EApp _ _) = error "cannot trace app"
-trace' _ (EVariant _ _) = error "cannot trace variant constructor"
-trace' ct EEmptyList = ELam ct $ toScope $ EEmptyList
-trace' ct (ESingletonList e) = ELam ct $ toScope $
-  ESingletonList (EApp (fmap F (trace' ct e)) (EVar (B ())))
-trace' ct (ERecord l) = ELam ct $ toScope $
-  ERecord (map (\(l, x) -> (l, EApp (fmap F $ trace' ct x) (EVar (B ())))) l)
-trace' ct (EFor m n) = ELam ct $ toScope $
-  EFor (EApp (fmap F (trace' ct m)) (ELam ct (toScope (EVar (B ()))))) $ toScope $
+trace' :: x -> Type c a -> Expr c a x -> Expr c a x
+trace' value ct ETrue = ELam ct $ toScope (EApp (EVar (B ())) (EVariant "Lit" ETrue))
+trace' value ct (EVar x) = ELam ct $ toScope (EApp (EVar (B ())) (EVar (F x)))
+trace' value _ (ELam _ _) = error "cannot trace lambda"
+trace' value _ (ETLam _ _) = error "cannot trace Lambda"
+trace' value _ (EApp _ _) = error "cannot trace app"
+trace' value _ (EVariant _ _) = error "cannot trace variant constructor"
+trace' value ct EEmptyList = ELam ct $ toScope $ EEmptyList
+trace' value ct (ESingletonList e) = ELam ct $ toScope $
+  ESingletonList (EApp (fmap F (trace' value ct e)) (EVar (B ())))
+trace' value ct (EConcat l r) = ELam ct $ toScope $
+  EConcat (EFor (EApp (fmap F $ trace' value ct l) (EVar (B ()))) $ toScope $
+                (ESingletonList (EVar (B ()))))
+          (EFor (EApp (fmap F $ trace' value ct l) (EVar (B ()))) $ toScope $
+                (ESingletonList (EVar (B ()))))
+trace' value ct (ERecord l) = ELam ct $ toScope $
+  ERecord (map (\(l, x) -> (l, EApp (fmap F $ trace' value ct x) (EVar (B ())))) l)
+trace' value ct (EFor m n) = ELam ct $ toScope $
+  EFor (EApp (fmap F (trace' value ct m)) (ELam ct (toScope (EVar (B ()))))) $ toScope $
   -- Right, so this fmap is where we keep the "same" variable that was
   -- bound in the body before.
-    EApp (fmap (\x -> case x of F x -> F (F x); B () -> B ()) (trace' ct (fromScope n))) $
+    EApp (fmap (\x -> case x of F x -> F (F x); B () -> B ()) (trace' (F value) ct (fromScope n))) $
          ELam ct $ toScope $ EApp (EVar (F (F (B ())))) (EVariant "For" (record [("in", EVar (F (B ()))), ("out", EVar (B ()))]))
+trace' value ct (EIf c t e) = ELam ct $ toScope $
+  EIf (EApp (EVar (F value)) (EApp (fmap F $ trace' value ct c) (ELam ct (toScope (EVar (B ()))))))
+      (EApp (fmap F $ trace' value ct t) 
+            (ELam ct $ toScope $
+               EApp (EVar (F (B ()))) $ EVariant "IfThen" (record [("cond", EApp (fmap (F . F) $ trace' value ct c) (ELam ct (toScope (EVar (B ()))))), ("then", EVar (B ()))])))
+      (EApp (fmap F $ trace' value ct e) 
+            (ELam ct $ toScope $
+               EApp (EVar (F (B ()))) $ EVariant "IfElse" (record [("cond", EApp (fmap (F . F) $ trace' value ct c) (ELam ct (toScope (EVar (B ()))))), ("else", EVar (B ()))])))
 
-trace = trace' TBool
+trace :: Expr Constructor String String -> Expr Constructor String String
+trace = trace' "value" TBool
 
--- trace (EVar x) = elam "t" (ttype (CVar "??")) (EApp (EVar "t") (EVar x))
--- trace (ELam _ _) = error "cannot trace lambda"
-{-
-trace (ETLam _ _) = error "cannot trace Lambda"
-trace (EApp _ _) = error "cannot trace app"
-trace (EVariant _ _) = error "cannot trace variant constructor"
-trace EEmptyList = elam "t" (ttype (CVar "??")) EEmptyList
-trace (ESingletonList e) = elam "t" (ttype (CVar "??")) (ESingletonList (EApp (trace e) (EVar "t")))
-trace (EConcat l r) = elam "t" (ttype (CVar "??")) (EConcat (efor "l" (EApp (trace l) (EVar "t")) (ESingletonList (EVar "l"))) (efor "r" (EApp (trace r) (EVar "t")) (ESingletonList (EVar "r"))))
-trace (EIf c t e) = elam "t" (ttype (CVar "??")) $
-  EIf (EApp (EVar "value") (EApp (trace c) idA)) -- TODO replace by proper identity function
-    (EApp (trace t) (elam "m" (TT (CVar "???")) (EApp (EVar "t") (EVariant "IfThen" (record [("cond", EApp (trace c) idA), ("then", EVar "m")])))))
-    (EApp (trace e) (elam "n" (TT (CVar "???")) (EApp (EVar "t") (EVariant "IfElse" (record [("cond", EApp (trace c) idA), ("else", EVar "n")])))))
-trace (EFor i o) = ELam (ttype (CVar "??")) $ toScope $
-  EFor (fmap F (trace i)) $
-    toScope $ EApp (_ o) $
-      ELam (TT (CVar "????")) $ toScope $ EApp (EVar _t) (EVariant "For" (record [("in", _i), ("out", _o)]))
- -- elam "t" (ttype (CVar "??")) $
- --   EFor (EApp (trace i) idA) $ {- TODO replace by proper identity function -}
- --     toScope $ EApp (_ o) $  "o" (TT (CVar "????")) (EApp (EVar "t") (EVariant "For" (record [("in", B ()), ("out", EVar "o")])))
-trace EEmptyRecord = elam "t" (ttype (CVar "??")) EEmptyRecord
-trace (ERecordExt l x r) = elam "t" (ttype (CVar "??")) $
-  ERecordExt l (EApp (trace x) (EVar "t"))
-    (EApp (trace r) (EVar "t"))
--}
 betaReduce :: Eq a => Monad c => Expr c a x -> Expr c a x
 betaReduce ETrue = ETrue
 betaReduce (EApp (ELam _ b) x) = instantiate1 x b
