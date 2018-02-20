@@ -13,7 +13,7 @@ import Control.Monad (ap)
 import Control.Monad.Morph (lift)
 -- import Data.Functor.Classes (Eq1)
 import Data.Deriving (deriveEq1)
-import Text.PrettyPrint.ANSI.Leijen
+import Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 import qualified Text.PrettyPrint.ANSI.Leijen as P
 
 -- I'm sure there's a better way to do this, but my hoogle-fu is insufficient
@@ -248,8 +248,8 @@ etlam a k b = ETLam k (eAbstractC1 a b) -- this should be actual abstract, not m
 polyId :: Expr Constructor a x
 polyId = ETLam KType $ ELam (TT $ toScope (CVar (B ()))) $ toScope (EVar (B ()))
 
-traceId :: Expr Constructor String x
-traceId = ETLam KType $ ELam (TT $ toScope (CApp (CVar (F "TRACE")) (CVar (B ())))) $ toScope (EVar (B ()))
+traceId :: Constructor a -> Expr Constructor a x
+traceId tracetf = ETLam KType $ ELam (TT $ toScope (CApp (F <$> tracetf) (CVar (B ())))) $ toScope (EVar (B ()))
 
 isApp :: Expr c a x -> Bool
 isApp (EApp _ _) = True
@@ -329,48 +329,55 @@ betaReduceN n e = betaReduceN (n-1) (betaReduce e)
 -- ttype :: Constructor String -> Type Constructor String
 -- ttype c = TArrow (TT (CApp (CVar "TRACE") c)) (TT (CApp (CVar "TRACE") c))
 
-ttype :: Type Constructor String
-ttype = tforall "a" KType (TArrow (TT (CApp (CVar "TRACE") (CVar "a"))) (TT (CApp (CVar "TRACE") (CVar "a"))))
+ttype :: Constructor a -> Type Constructor a
+ttype tracetf = TForall KType $
+  TArrow (TT $ toScope $ CApp (fmap F tracetf) (CVar (B ())))
+         (TT $ toScope $ CApp (fmap F tracetf) (CVar (B ())))
 
-trace' :: x -> Type Constructor String -> Expr Constructor String x -> Expr Constructor String x
-trace' _ _ (ELam _ _) = error "cannot trace lambda"
-trace' _ _ (ETLam _ _) = error "cannot trace Lambda"
-trace' _ _ (EApp _ _) = error "cannot trace app"
-trace' _ _ (EVariant _ _) = error "cannot trace variant constructor"
-trace' _ (TT CBool) ETrue = ELam ttype $ toScope $
+trace' :: Constructor a -> x -> Type Constructor a -> Expr Constructor a x -> Expr Constructor a x
+trace' _ _ _ (ELam _ _) = error "cannot trace lambda"
+trace' _ _ _ (ETLam _ _) = error "cannot trace Lambda"
+trace' _ _ _ (EApp _ _) = error "cannot trace app"
+trace' _ _ _ (EVariant _ _) = error "cannot trace variant constructor"
+trace' tracetf _ (TT CBool) ETrue = ELam (ttype tracetf) $ toScope $
   EApp (ETApp (EVar (B ())) CBool) (EVariant "Lit" ETrue)
-trace' _ (TT c) (EVar x) = ELam ttype $ toScope (EApp (ETApp (EVar (B ())) c) (EVar (F x)))
-trace' _ _ EEmptyList = ELam ttype $ toScope $ EEmptyList
-trace' value (TT (CList c)) (ESingletonList e) = ELam ttype $ toScope $
-  ESingletonList (EApp (fmap F (trace' value (TT c) e)) (EVar (B ())))
-trace' value t@(TT (CList c)) (EConcat l r) = ELam ttype $ toScope $
-  EConcat (EFor (TT (CApp (CVar "TRACE") c)) (EApp (fmap F $ trace' value t l) (EVar (B ()))) $ toScope $
+trace' tracetf _ (TT c) (EVar x) = ELam (ttype tracetf) $ toScope (EApp (ETApp (EVar (B ())) c) (EVar (F x)))
+trace' tracetf _ _ EEmptyList = ELam (ttype tracetf) $ toScope $ EEmptyList
+trace' tracetf value (TT (CList c)) (ESingletonList e) = ELam (ttype tracetf) $ toScope $
+  ESingletonList (EApp (fmap F (trace' tracetf value (TT c) e)) (EVar (B ())))
+trace' tracetf value t@(TT (CList c)) (EConcat l r) = ELam (ttype tracetf) $ toScope $
+  EConcat (EFor (TT (CApp tracetf c)) (EApp (fmap F $ trace' tracetf value t l) (EVar (B ()))) $ toScope $
                 (ESingletonList (EVar (B ()))))
-          (EFor (TT (CApp (CVar "TRACE") c)) (EApp (fmap F $ trace' value t r) (EVar (B ()))) $ toScope $
+          (EFor (TT (CApp tracetf c)) (EApp (fmap F $ trace' tracetf value t r) (EVar (B ()))) $ toScope $
                 (ESingletonList (EVar (B ()))))
-trace' value ct (ERecord l) = ELam ct $ toScope $
-  ERecord (mapSnd (\x -> EApp (fmap F $ trace' value ct x) (EVar (B ()))) l)
-trace' value t (EFor (TT mElementC) m n) = ELam ttype $ toScope $
-  EFor (TT (CApp (CVar "TRACE") mElementC))
-       (EApp (fmap F (trace' value (TT (CList mElementC)) m)) traceId) $ toScope $
+trace' tracetf value ct (ERecord l) = ELam ct $ toScope $
+  ERecord (mapSnd (\x -> EApp (fmap F $ trace' tracetf value ct x) (EVar (B ()))) l)
+trace' tracetf value t (EFor (TT mElementC) m n) = ELam (ttype tracetf) $ toScope $
+  EFor (TT (CApp tracetf mElementC))
+       (EApp (fmap F (trace' tracetf value (TT (CList mElementC)) m)) (traceId tracetf)) $ toScope $
   -- Right, so this fmap is where we keep the "same" variable that was
   -- bound in the body before.
-    EApp (fmap (\v -> case v of F x -> F (F x); B () -> B ()) (trace' (F value) t (fromScope n))) $
-         ETLam KType $ ELam (TT (toScope (CApp (CVar (F "TRACE")) (CVar (B ()))))) $ toScope $
+    EApp (fmap (\v -> case v of F x -> F (F x); B () -> B ()) (trace' tracetf (F value) t (fromScope n))) $
+         ETLam KType $ ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
             EApp (ETApp (EVar (F (F (B ())))) (toScope (CTrace (CVar (B ())))))
                  (EVariant "For" (ERecord [("in", EVar (F (B ()))), ("out", EVar (B ()))]))
-trace' value ct (EIf c t e) = ELam ct $ toScope $
-  EIf (EApp (EVar (F value)) (EApp (fmap F $ trace' value ct c) (ELam ct (toScope (EVar (B ()))))))
-      (EApp (fmap F $ trace' value ct t) 
-            (ELam ct $ toScope $
-               EApp (EVar (F (B ()))) $ EVariant "IfThen" (ERecord [("cond", EApp (fmap (F . F) $ trace' value ct c) (ELam ct (toScope (EVar (B ()))))), ("then", EVar (B ()))])))
-      (EApp (fmap F $ trace' value ct e) 
-            (ELam ct $ toScope $
-               EApp (EVar (F (B ()))) $ EVariant "IfElse" (ERecord [("cond", EApp (fmap (F . F) $ trace' value ct c) (ELam ct (toScope (EVar (B ()))))), ("else", EVar (B ()))])))
-trace' _ _t _e = error "missing case in trace' or nonsensical type?"
+trace' tracetf value (TT c) (EIf eCond eThen eElse) = ELam (ttype tracetf) $ toScope $
+  EIf (EApp (EVar (F value)) (tCondId F))
+      (EApp (F <$> trace' tracetf value (TT c) eThen)
+            (ETLam KType $ ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
+               EApp (ETApp (EVar (F (B ()))) (toScope (F <$> CApp tracetf c))) $
+                    EVariant "IfThen" (ERecord [("cond", liftCE (tCondId (F . F))), ("then", EVar (B ()))])))
+      (EApp (F <$> trace' tracetf value (TT c) eElse)
+            (ETLam KType $ ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
+               EApp (ETApp (EVar (F (B ()))) (toScope (F <$> CApp tracetf c))) $
+                    EVariant "IfElse" (ERecord [("cond", liftCE (tCondId (F . F))), ("else", EVar (B ()))])))
+  where
+    tCondId lifting = EApp (lifting <$> trace' tracetf value (TT CBool) eCond) (traceId tracetf)
+    
+trace' _ _ _t _e = error "missing case in trace' or nonsensical type?"
 
 trace :: Type Constructor String -> Expr Constructor String String -> Expr Constructor String String
-trace = trace' "value"
+trace = trace' (CVar "TRACE") "value"
 
 
 putE :: Expr Constructor String String -> IO ()
@@ -399,22 +406,32 @@ someFunc = do
   -- putE (ETApp polyId (CVar "foo"))
   -- putE $ betaReduceN 1 $ ETApp polyId (CVar "foo")
   -- putE $ betaReduceN 1 (ETApp traceId (CVar "foo"))
-  putE $ betaReduceN 0 (EApp (trace (TT (CList (CList CBool))) (ESingletonList (ESingletonList ETrue))) traceId)
+  -- putE $ betaReduceN 0 (EApp (trace (TT (CList (CList CBool))) (ESingletonList (ESingletonList ETrue))) traceId)
   let simpleFor = efor "m" (TT (CVar "am")) (EVar "M") (EVar "N") --(ESingeltonList (EVar "m"))
   putE simpleFor
   putE $ trace (TT (CList (CVar "an"))) simpleFor
-  putE $ betaReduceN 0 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
-  putE $ betaReduceN 1 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
-  putE $ betaReduceN 2 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
-  putE $ betaReduceN 3 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
-  putE $ betaReduceN 4 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
-  putE $ betaReduceN 5 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
-  -- putE $ betaReduceN 5 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
-  -- putE $ betaReduceN 1 $ trace (TT (CList (CVar "an"))) simpleFor
+  putE $ betaReduceN 0 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
+  putE $ betaReduceN 1 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
+  putE $ betaReduceN 2 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
+  putE $ betaReduceN 3 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
   -- let forNested = efor "a" (EVar "as") (efor "b" (EVar "bs") (ESingletonList (ERecord [("a", EVar "a"), ("b", EVar "b")])))
   -- putE forNested
   -- putE $ betaReduceN 9 $ trace forNested
-  -- let forIf = efor "x" (TT CBool) (EConcat (EVar "xs") (EVar "ys")) (EIf ETrue (ESingletonList (EVar "x")) EEmptyList)
-  -- putE forIf
-  -- putE $ trace (TT (CList CBool)) forIf
-  -- putE $ betaReduceN 9 $ trace (TT (CList CBool)) forIf
+
+  -- let ifThenElse = EIf (EVar "COND") (EVar "THEN") (EVar "ELSE")
+  -- putE ifThenElse
+  -- putE $ betaReduceN 0 $ EApp (trace (TT (CVar "whatev")) ifThenElse) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 8 $ EApp (trace (TT (CVar "whatev")) ifThenElse) (traceId (CVar "TRACE"))
+
+  let forIf = efor "x" (TT CBool) (EConcat (EVar "xs") (EVar "ys")) (EIf ETrue (ESingletonList (EVar "x")) EEmptyList)
+  putE forIf
+  putE $ betaReduceN 0 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 1 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 2 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 3 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 4 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 5 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 6 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 7 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 8 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
+  putE $ betaReduceN 9 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
