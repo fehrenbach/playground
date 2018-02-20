@@ -2,6 +2,9 @@
 
 module Lib
     ( someFunc
+    , clam
+    , elam
+    , etlam
     ) where
 
 import Bound ((>>>=), Var(B,F))
@@ -22,6 +25,10 @@ pparens :: Bool -> Doc -> Doc
 pparens True d = black (char '(') <> d <> black (char ')')
 pparens False d = d
 
+tvars, evars :: [String]
+tvars = ["α", "β", "γ"] <> [ "α" <> show x | x <- [0 :: Integer ..] ]
+evars = ["x", "y", "z"] <> [ "x" <> show x | x <- [0 :: Integer ..] ]
+
 data Kind = KType | KArrow Kind Kind
   deriving (Eq)
 
@@ -37,9 +44,10 @@ data Constructor a
   | CLambda Kind (Scope () Constructor a)
   | CApp (Constructor a) (Constructor a)
   | CList (Constructor a)
+  | CTrace (Constructor a)
   -- I don't really want another datatype
-  | CRowNil
-  | CRowCons Label (Constructor a) (Constructor a)
+  -- | CRowNil
+  -- | CRowCons Label (Constructor a) (Constructor a)
   deriving (Functor)
 
 deriveEq1 ''Constructor
@@ -56,8 +64,9 @@ instance Monad Constructor where
   CLambda k b >>= f = CLambda k (b >>>= f)
   CApp a b >>= f = CApp (a >>= f) (b >>= f)
   CList a >>= f = CList (a >>= f)
-  CRowNil >>= _ = CRowNil
-  CRowCons l c r >>= f = CRowCons l (c >>= f) (r >>= f)
+  CTrace a >>= f = CTrace (a >>= f)
+  -- CRowNil >>= _ = CRowNil
+  -- CRowCons l c r >>= f = CRowCons l (c >>= f) (r >>= f)
 
 clam :: Eq a => a -> Kind -> Constructor a -> Constructor a
 clam a k b = CLambda k (abstract1 a b)
@@ -71,6 +80,7 @@ prettyConstructor (av:avs) p (CLambda k body) = pparens p $
 prettyConstructor avs p (CApp a b) = pparens p $
   prettyConstructor avs True a <+> prettyConstructor avs True b
 prettyConstructor avs p (CList a) = pparens p $ text "List*" <+> prettyConstructor avs True a
+prettyConstructor avs p (CTrace a) = pparens p $ text "Trace*" <+> prettyConstructor avs True a
 
 data Type c a
   = TBool
@@ -142,7 +152,8 @@ data Expr c a x
   | EEmptyList -- add type hint? (Type c a)
   | ESingletonList (Expr c a x)
   | EConcat (Expr c a x) (Expr c a x)
-  | EFor {- (Type c a) -} (Expr c a x) (Scope () (Expr c a) x)
+  -- The Type is the type of ELEMENTS of the first Expr argument
+  | EFor (Type c a) (Expr c a x) (Scope () (Expr c a) x)
   | ERecord [(Label, Expr c a x)]
   deriving (Functor)
 
@@ -156,7 +167,7 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   ETrue >>= _ = ETrue
   EVar x >>= f = f x
   ELam t b >>= f = ELam t (b >>>= f)
-  EFor e b >>= f = EFor (e >>= f) (b >>>= f)
+  EFor t e b >>= f = EFor t (e >>= f) (b >>>= f)
   EApp l r >>= f = EApp (l >>= f) (r >>= f)
   ETLam k b >>= f = ETLam k (b >>= liftCE . f)
   ETApp e c >>= f = ETApp (e >>= f) c
@@ -171,7 +182,7 @@ liftCE :: Monad c => Expr c a b -> Expr (Scope () c) a b
 liftCE ETrue = ETrue
 liftCE (EVar x) = EVar x
 liftCE (ELam t b) = ELam (liftCT t) (hoistScope liftCE b)
-liftCE (EFor e b) = EFor (liftCE e) (hoistScope liftCE b)
+liftCE (EFor t e b) = EFor (liftCT t) (liftCE e) (hoistScope liftCE b)
 liftCE (EApp l r) = EApp (liftCE l) (liftCE r)
 liftCE (ETLam k b) = ETLam k (liftCE b)
 liftCE (ETApp e c) = ETApp (liftCE e) (lift c)
@@ -193,8 +204,8 @@ liftCT (TTrace a) = TTrace (liftCT a)
 elam :: Eq x => x -> Type c a -> Expr c a x -> Expr c a x
 elam x t b = ELam t (abstract1 x b)
 
-efor :: Eq x => x -> Expr c a x -> Expr c a x -> Expr c a x
-efor x i o = EFor i (abstract1 x o)
+efor :: Eq x => x -> Type c a -> Expr c a x -> Expr c a x -> Expr c a x
+efor x t i o = EFor t i (abstract1 x o)
 
 -- instantiate a constructor in an expression
 eInstantiateC1 :: Eq a => Monad c => c a -> Expr (Scope () c) a x -> Expr c a x
@@ -208,7 +219,7 @@ eInstantiateC1 _ EEmptyList = EEmptyList
 eInstantiateC1 a (EVariant l e) = EVariant l (eInstantiateC1 a e)
 eInstantiateC1 a (ESingletonList e) = ESingletonList (eInstantiateC1 a e)
 eInstantiateC1 a (EConcat l r) = EConcat (eInstantiateC1 a l) (eInstantiateC1 a r)
-eInstantiateC1 a (EFor i o) = EFor (eInstantiateC1 a i) (hoistScope (eInstantiateC1 a) o)
+eInstantiateC1 a (EFor t i o) = EFor (tInstantiate1 a t) (eInstantiateC1 a i) (hoistScope (eInstantiateC1 a) o)
 eInstantiateC1 a (EIf c t e) = EIf (eInstantiateC1 a c) (eInstantiateC1 a t) (eInstantiateC1 a e)
 eInstantiateC1 a (ERecord l) = ERecord (mapSnd (eInstantiateC1 a) l)
 
@@ -224,15 +235,21 @@ eAbstractC1 _ EEmptyList = EEmptyList
 eAbstractC1 a (EVariant l e) = EVariant l (eAbstractC1 a e)
 eAbstractC1 a (ESingletonList e) = ESingletonList (eAbstractC1 a e)
 eAbstractC1 a (EConcat l r) = EConcat (eAbstractC1 a l) (eAbstractC1 a r)
-eAbstractC1 a (EFor i o) = EFor (eAbstractC1 a i) (hoistScope (eAbstractC1 a) o)
+eAbstractC1 a (EFor t i o) = EFor (tAbstract1 a t) (eAbstractC1 a i) (hoistScope (eAbstractC1 a) o)
 eAbstractC1 a (EIf c t e) = EIf (eAbstractC1 a c) (eAbstractC1 a t) (eAbstractC1 a e)
 eAbstractC1 a (ERecord l) = ERecord (mapSnd (eAbstractC1 a) l)
 
 etlam :: Eq a => Monad c => a -> Kind -> Expr c a x -> Expr c a x
 etlam a k b = ETLam k (eAbstractC1 a b) -- this should be actual abstract, not my misnamed one, I think
 
-polyId :: Expr Constructor String String
-polyId = etlam "a" KType (elam "ex" (TT (CVar "a")) (EVar "ex"))
+-- polyId' :: Expr Constructor String String
+-- polyId' = etlam "a" KType (elam "ex" (TT (CVar "a")) (EVar "ex"))
+
+polyId :: Expr Constructor a x
+polyId = ETLam KType $ ELam (TT $ toScope (CVar (B ()))) $ toScope (EVar (B ()))
+
+traceId :: Expr Constructor String x
+traceId = ETLam KType $ ELam (TT $ toScope (CApp (CVar (F "TRACE")) (CVar (B ())))) $ toScope (EVar (B ()))
 
 isApp :: Expr c a x -> Bool
 isApp (EApp _ _) = True
@@ -247,7 +264,10 @@ prettyExpr _ _ (EVar x) = text x
 prettyExpr (v:vs, tvs) p (ELam t b) = pparens p $ hang 2 $ group $
   char 'λ' <> text v <> char ':' <> prettyType tvs False t <> char '.' P.<$$> prettyExpr (vs, tvs) False (instantiate1 (EVar v) b)
 prettyExpr (vs, tv:tvs) p (ETLam k b) = pparens p $ hang 2 $ group $
-  char 'Λ' <> text tv <> char ':' <> prettyKind k <> char '.' P.<$$> prettyExpr (vs, tvs) False (eInstantiateC1 (CVar tv) b)
+  char 'Λ' <> text tv <> kindAnnotation <> char '.' P.<$$> prettyExpr (vs, tvs) False (eInstantiateC1 (CVar tv) b)
+  where kindAnnotation = case k of
+          KType -> empty
+          _ -> char ':' <> prettyKind k
 prettyExpr ns p (EVariant l e) = pparens p $
   dullgreen (text l) <+> prettyExpr ns True e
 prettyExpr ns p (EApp l r) = pparens p $
@@ -257,8 +277,9 @@ prettyExpr (vs, tvs) p (ETApp e c) = pparens p $
 prettyExpr _ _ EEmptyList = text "[]"
 prettyExpr ns _ (ESingletonList e) = brackets $ prettyExpr ns False e
 prettyExpr ns p (EConcat l r) = pparens p $ prettyExpr ns True l <+> text "++" <+> prettyExpr ns True r
-prettyExpr (v:vs, tvs) p (EFor i o) = pparens p $ hang 2 $
-  bold (text "for") <+> parens (text v <+> text "<-" <+> prettyExpr (v:vs, tvs) False i) P.<$> prettyExpr (vs, tvs) False (instantiate1 (EVar v) o)
+prettyExpr (v:vs, tvs) p (EFor t i o) = pparens p $ hang 2 $
+  bold (text "for") <+> parens (text v <> typeAnnotation <+> text "<-" <+> prettyExpr (v:vs, tvs) False i) P.<$> prettyExpr (vs, tvs) False (instantiate1 (EVar v) o)
+  where typeAnnotation = char ':' <+> prettyType tvs False t
 prettyExpr _ _ (ERecord []) = braces empty
 prettyExpr ns _ (ERecord l) = group $ char '{' <> (align $ printRec ns l)
 prettyExpr ns p (EIf c t e) = pparens p $ group $
@@ -280,9 +301,30 @@ printRec ns ((l,x):r) = blue (text l) <+> char '=' <+> prettyExpr ns False x <> 
 -- freeVariables :: Expr (Type String) String -> [String]
 -- freeVariables = bitraverse
 -}
-tvars, evars :: [String]
-tvars = ["α", "β", "γ"] <> [ "α" <> show x | x <- [0 :: Integer ..] ]
-evars = ["x", "y", "z"] <> [ "x" <> show x | x <- [0 :: Integer ..] ]
+
+betaReduce :: Eq a => Monad c => Expr c a x -> Expr c a x
+betaReduce ETrue = ETrue
+-- TODO might want to check types before reducing
+betaReduce (EApp (ELam _t b) x) = instantiate1 x b
+betaReduce (EApp f x) = EApp (betaReduce f) (betaReduce x)
+-- TODO might want to check kinds before reducing
+betaReduce (ETApp (ETLam _k b) c) = eInstantiateC1 c b
+betaReduce (ETApp e c) = ETApp (betaReduce e) c
+betaReduce (EVar x) = EVar x
+betaReduce (ELam t b) = ELam t (hoistScope betaReduce b)
+betaReduce (ETLam k b) = ETLam k (betaReduce b)
+betaReduce (EVariant l e) = EVariant l (betaReduce e)
+betaReduce (ESingletonList e) = ESingletonList (betaReduce e)
+betaReduce EEmptyList = EEmptyList
+betaReduce (EConcat l r) = EConcat (betaReduce l) (betaReduce r)
+betaReduce (EFor t i o) = EFor t (betaReduce i) (hoistScope betaReduce o)
+betaReduce (EIf c t e) = EIf (betaReduce c) (betaReduce t) (betaReduce e)
+betaReduce (ERecord l) = ERecord (mapSnd betaReduce l)
+
+betaReduceN :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
+betaReduceN 0 e = e
+betaReduceN n e = betaReduceN (n-1) (betaReduce e)
+
 
 -- ttype :: Constructor String -> Type Constructor String
 -- ttype c = TArrow (TT (CApp (CVar "TRACE") c)) (TT (CApp (CVar "TRACE") c))
@@ -301,19 +343,22 @@ trace' _ (TT c) (EVar x) = ELam ttype $ toScope (EApp (ETApp (EVar (B ())) c) (E
 trace' _ _ EEmptyList = ELam ttype $ toScope $ EEmptyList
 trace' value (TT (CList c)) (ESingletonList e) = ELam ttype $ toScope $
   ESingletonList (EApp (fmap F (trace' value (TT c) e)) (EVar (B ())))
-trace' value ct (EConcat l r) = ELam ct $ toScope $
-  EConcat (EFor (EApp (fmap F $ trace' value ct l) (EVar (B ()))) $ toScope $
+trace' value t@(TT (CList c)) (EConcat l r) = ELam ttype $ toScope $
+  EConcat (EFor (TT (CApp (CVar "TRACE") c)) (EApp (fmap F $ trace' value t l) (EVar (B ()))) $ toScope $
                 (ESingletonList (EVar (B ()))))
-          (EFor (EApp (fmap F $ trace' value ct r) (EVar (B ()))) $ toScope $
+          (EFor (TT (CApp (CVar "TRACE") c)) (EApp (fmap F $ trace' value t r) (EVar (B ()))) $ toScope $
                 (ESingletonList (EVar (B ()))))
 trace' value ct (ERecord l) = ELam ct $ toScope $
   ERecord (mapSnd (\x -> EApp (fmap F $ trace' value ct x) (EVar (B ()))) l)
-trace' value ct (EFor m n) = ELam ct $ toScope $
-  EFor (EApp (fmap F (trace' value ct m)) (ELam ct (toScope (EVar (B ()))))) $ toScope $
+trace' value t (EFor (TT mElementC) m n) = ELam ttype $ toScope $
+  EFor (TT (CApp (CVar "TRACE") mElementC))
+       (EApp (fmap F (trace' value (TT (CList mElementC)) m)) traceId) $ toScope $
   -- Right, so this fmap is where we keep the "same" variable that was
   -- bound in the body before.
-    EApp (fmap (\v -> case v of F x -> F (F x); B () -> B ()) (trace' (F value) ct (fromScope n))) $
-         ELam ct $ toScope $ EApp (EVar (F (F (B ())))) (EVariant "For" (ERecord [("in", EVar (F (B ()))), ("out", EVar (B ()))]))
+    EApp (fmap (\v -> case v of F x -> F (F x); B () -> B ()) (trace' (F value) t (fromScope n))) $
+         ETLam KType $ ELam (TT (toScope (CApp (CVar (F "TRACE")) (CVar (B ()))))) $ toScope $
+            EApp (ETApp (EVar (F (F (B ())))) (toScope (CTrace (CVar (B ())))))
+                 (EVariant "For" (ERecord [("in", EVar (F (B ()))), ("out", EVar (B ()))]))
 trace' value ct (EIf c t e) = ELam ct $ toScope $
   EIf (EApp (EVar (F value)) (EApp (fmap F $ trace' value ct c) (ELam ct (toScope (EVar (B ()))))))
       (EApp (fmap F $ trace' value ct t) 
@@ -327,25 +372,6 @@ trace' _ _t _e = error "missing case in trace' or nonsensical type?"
 trace :: Type Constructor String -> Expr Constructor String String -> Expr Constructor String String
 trace = trace' "value"
 
-betaReduce :: Eq a => Monad c => Expr c a x -> Expr c a x
-betaReduce ETrue = ETrue
-betaReduce (EApp (ELam _ b) x) = instantiate1 x b
-betaReduce (EApp f x) = EApp (betaReduce f) (betaReduce x)
-betaReduce (ETApp e c) = ETApp (betaReduce e) c {- TODO optionally beta reduce type applications? -}
-betaReduce (EVar x) = EVar x
-betaReduce (ELam t b) = ELam t (hoistScope betaReduce b)
-betaReduce (ETLam k b) = ETLam k (betaReduce b)
-betaReduce (EVariant l e) = EVariant l (betaReduce e)
-betaReduce (ESingletonList e) = ESingletonList (betaReduce e)
-betaReduce EEmptyList = EEmptyList
-betaReduce (EConcat l r) = EConcat (betaReduce l) (betaReduce r)
-betaReduce (EFor i o) = EFor (betaReduce i) (hoistScope betaReduce o)
-betaReduce (EIf c t e) = EIf (betaReduce c) (betaReduce t) (betaReduce e)
-betaReduce (ERecord l) = ERecord (mapSnd betaReduce l)
-
-betaReduceN :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
-betaReduceN 0 e = e
-betaReduceN n e = betaReduceN (n-1) (betaReduce e)
 
 putE :: Expr Constructor String String -> IO ()
 putE e = do
@@ -362,20 +388,33 @@ someFunc = do
   -- putStrLn ""
   -- putDoc $ prettyExpr (evars, tvars) False polyId
   -- putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace (TT CBool) ETrue)
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace (TT (CList CBool))  (EVar "foo"))
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace (TT (CList CBool)) EEmptyList)
-  putStrLn ""
-  putDoc $ prettyExpr (evars, tvars) False (trace (TT (CList CBool)) (ESingletonList ETrue))
-  putStrLn ""
-  putE $ betaReduceN 0 (EApp (trace (TT (CList (CList CBool))) (ESingletonList (ESingletonList ETrue))) polyId)
-{-  -- let forNested = efor "a" (EVar "as") (efor "b" (EVar "bs") (ESingletonList (record [("a", EVar "a"), ("b", EVar "b")])))
+  -- putDoc $ prettyExpr (evars, tvars) False (trace (TT CBool) ETrue)
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False (trace (TT (CList CBool))  (EVar "foo"))
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False (trace (TT (CList CBool)) EEmptyList)
+  -- putStrLn ""
+  -- putDoc $ prettyExpr (evars, tvars) False (trace (TT (CList CBool)) (ESingletonList ETrue))
+  -- putStrLn ""
+  -- putE (ETApp polyId (CVar "foo"))
+  -- putE $ betaReduceN 1 $ ETApp polyId (CVar "foo")
+  -- putE $ betaReduceN 1 (ETApp traceId (CVar "foo"))
+  putE $ betaReduceN 0 (EApp (trace (TT (CList (CList CBool))) (ESingletonList (ESingletonList ETrue))) traceId)
+  let simpleFor = efor "m" (TT (CVar "am")) (EVar "M") (EVar "N") --(ESingeltonList (EVar "m"))
+  putE simpleFor
+  putE $ trace (TT (CList (CVar "an"))) simpleFor
+  putE $ betaReduceN 0 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
+  putE $ betaReduceN 1 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
+  putE $ betaReduceN 2 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
+  putE $ betaReduceN 3 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
+  putE $ betaReduceN 4 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
+  putE $ betaReduceN 5 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
+  -- putE $ betaReduceN 5 $ (EApp (trace (TT (CList (CVar "an"))) simpleFor) traceId)
+  -- putE $ betaReduceN 1 $ trace (TT (CList (CVar "an"))) simpleFor
+  -- let forNested = efor "a" (EVar "as") (efor "b" (EVar "bs") (ESingletonList (ERecord [("a", EVar "a"), ("b", EVar "b")])))
   -- putE forNested
   -- putE $ betaReduceN 9 $ trace forNested
-  let forIf = efor "x" (EConcat (EVar "xs") (EVar "ys")) (EIf ETrue (ESingletonList (EVar "x")) EEmptyList)
-  putE forIf
-  putE $ trace (TT (CList CBool)) forIf
-  putE $ betaReduceN 9 $ trace (TT (CList CBool)) forIf
--}
+  -- let forIf = efor "x" (TT CBool) (EConcat (EVar "xs") (EVar "ys")) (EIf ETrue (ESingletonList (EVar "x")) EEmptyList)
+  -- putE forIf
+  -- putE $ trace (TT (CList CBool)) forIf
+  -- putE $ betaReduceN 9 $ trace (TT (CList CBool)) forIf
