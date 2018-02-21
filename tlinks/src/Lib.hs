@@ -352,12 +352,12 @@ trace' tracetf value t@(TT (CList c)) (EConcat l r) = ELam (ttype tracetf) $ toS
                 (ESingletonList (EVar (B ()))))
 trace' tracetf value ct (ERecord l) = ELam ct $ toScope $
   ERecord (mapSnd (\x -> EApp (fmap F $ trace' tracetf value ct x) (EVar (B ()))) l)
-trace' tracetf value t (EFor (TT mElementC) m n) = ELam (ttype tracetf) $ toScope $
+trace' tracetf value (TT (CList nElementC)) (EFor (TT mElementC) m n) = ELam (ttype tracetf) $ toScope $
   EFor (TT (CApp tracetf mElementC))
        (EApp (fmap F (trace' tracetf value (TT (CList mElementC)) m)) (traceId tracetf)) $ toScope $
   -- Right, so this fmap is where we keep the "same" variable that was
   -- bound in the body before.
-    EApp (fmap (\v -> case v of F x -> F (F x); B () -> B ()) (trace' tracetf (F value) t (fromScope n))) $
+    EApp (fmap (\v -> case v of F x -> F (F x); B () -> B ()) (trace' tracetf (F value) (TT (CList nElementC)) (fromScope n))) $
          ETLam KType $ ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
             EApp (ETApp (EVar (F (F (B ())))) (toScope (CTrace (CVar (B ())))))
                  (EVariant "For" (ERecord [("in", EVar (F (B ()))), ("out", EVar (B ()))]))
@@ -409,11 +409,11 @@ someFunc = do
   -- putE $ betaReduceN 0 (EApp (trace (TT (CList (CList CBool))) (ESingletonList (ESingletonList ETrue))) traceId)
   let simpleFor = efor "m" (TT (CVar "am")) (EVar "M") (EVar "N") --(ESingeltonList (EVar "m"))
   putE simpleFor
-  putE $ trace (TT (CList (CVar "an"))) simpleFor
   putE $ betaReduceN 0 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
   putE $ betaReduceN 1 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
   putE $ betaReduceN 2 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
   putE $ betaReduceN 3 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
+  putE $ betaReduceN 4 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
   -- let forNested = efor "a" (EVar "as") (efor "b" (EVar "bs") (ESingletonList (ERecord [("a", EVar "a"), ("b", EVar "b")])))
   -- putE forNested
   -- putE $ betaReduceN 9 $ trace forNested
