@@ -25,6 +25,7 @@ dependencies:
 - bound
 - deriving-compat
 - mmorph
+- mtl
 
 library:
   source-dirs: src
