@@ -6,6 +6,7 @@ module Lib
     , tforall
     , elam
     , etlam
+    , efor
     ) where
 
 import Bound ((>>>=), Var(B,F))
@@ -44,6 +45,7 @@ type Label = String
 
 data Constructor a
   = CBool
+  | CString
   | CVar a {- Uhm. I'd quite like a type annotation on variables, but then how do I write `return`?! -}
   | CLambda Kind (Scope () Constructor a)
   | CApp (Constructor a) (Constructor a)
@@ -56,6 +58,7 @@ data Constructor a
   deriving (Functor)
 
 deriveEq1 ''Constructor
+deriving instance Eq a => Eq (Constructor a)
 
 instance Applicative Constructor where
   pure = return
@@ -65,6 +68,7 @@ instance Monad Constructor where
   return = CVar
 
   CBool >>= _ = CBool
+  CString >>= _ = CString
   CVar a >>= f = f a
   CLambda k b >>= f = CLambda k (b >>>= f)
   CApp a b >>= f = CApp (a >>= f) (b >>= f)
@@ -79,7 +83,11 @@ clam a k b = CLambda k (abstract1 a b)
 
 prettyConstructor :: [String] -> Bool -> Constructor String -> Doc
 prettyConstructor [] _ _ = error "ran out of type variables during constructor pretty printing"
+-- TODO these might be needed for rowmap and stuff
+prettyConstructor _ _ CRowNil = error "row outside of record"
+prettyConstructor _ _ (CRowCons _ _ _) = error "row outside of record"
 prettyConstructor _ _ CBool = text "Bool*"
+prettyConstructor _ _ CString = text "String*"
 prettyConstructor _ _ (CVar a) = text a
 prettyConstructor (av:avs) p (CLambda k body) = pparens p $
   char 'λ' <> text av <> char ':' <> prettyKind k <> char '.' <> prettyConstructor avs False (instantiate1 (CVar av) body)
@@ -89,20 +97,13 @@ prettyConstructor avs p (CList a) = pparens p $ text "List*" <+> prettyConstruct
 prettyConstructor avs p (CTrace a) = pparens p $ text "Trace*" <+> prettyConstructor avs True a
 prettyConstructor avs p (CRecord row) = pparens p $ text "Record*" <+> parens (prettyCRow avs row)
 
-prettyCRow avs CRowNil = char '⋅'
+prettyCRow :: [String] -> Constructor String -> Doc
+prettyCRow _ CRowNil = char '⋅'
 prettyCRow avs (CRowCons l c CRowNil) =
   text l <> char ':' <+> prettyConstructor avs False c
 prettyCRow avs (CRowCons l c r) =
   text l <> char ':' <+> prettyConstructor avs False c <> char ',' <+> prettyCRow avs r
-
--- prettyExpr _ _ (ERecord []) = braces empty
--- prettyExpr ns _ (ERecord l) = group $ char '{' <> (align $ printRec ns l)
-
--- printRec :: ([String], [String]) -> [(String, Expr Constructor String String)] -> Doc
--- printRec _ [] = char '}'
--- printRec ns [(l,x)] = blue (text l) <+> char '=' <+> prettyExpr ns False x <> char '}'
--- printRec ns ((l,x):r) = blue (text l) <+> char '=' <+> prettyExpr ns False x <> char ',' </> printRec ns
-
+prettyCRow _ _ = error "not a crow"
 
 data Type c a
   = TBool
@@ -180,6 +181,7 @@ data Expr c a x
   | ERecord [(Label, Expr c a x)]
   -- the Type is the type of the record. I need this for tracing.
   | EProj Label (Type c a) (Expr c a x)
+  | ETable String (Type c a) -- type of ELEMENTS/ROWS that is, a record type, not a list type
   deriving (Functor)
 
 instance (Eq a, Monad c) => Applicative (Expr c a) where
@@ -205,6 +207,7 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   ERecord le >>= f = ERecord (map (\(l, x) -> (l, x >>= f)) le)
   EIf i t e >>= f = EIf (i >>= f) (t >>= f) (e >>= f)
   EProj l t e >>= f = EProj l t (e >>= f)
+  ETable n t >>= _ = ETable n t
 
 liftCE :: Monad c => Expr c a b -> Expr (Scope () c) a b
 liftCE ETrue = ETrue
@@ -223,6 +226,7 @@ liftCE (EConcat l r) = EConcat (liftCE l) (liftCE r)
 liftCE (EIf i t e) = EIf (liftCE i) (liftCE t) (liftCE e)
 liftCE (ERecord l) = ERecord (mapSnd liftCE l)
 liftCE (EProj l t e) = EProj l (liftCT t) (liftCE e)
+liftCE (ETable n t) = ETable n (liftCT t)
 
 liftCT :: Monad c => Type c a -> Type (Scope () c) a
 liftCT TBool = TBool
@@ -256,11 +260,13 @@ eInstantiateC1 a (EFor t i o) = EFor (tInstantiate1 a t) (eInstantiateC1 a i) (h
 eInstantiateC1 a (EIf c t e) = EIf (eInstantiateC1 a c) (eInstantiateC1 a t) (eInstantiateC1 a e)
 eInstantiateC1 a (ERecord l) = ERecord (mapSnd (eInstantiateC1 a) l)
 eInstantiateC1 a (EProj l t e) = EProj l (tInstantiate1 a t) (eInstantiateC1 a e)
+eInstantiateC1 a (ETable n t) = ETable n (tInstantiate1 a t)
 
 -- abstract over a constructor in an expression
 eAbstractC1 :: Eq a => Functor c => a -> Expr c a x -> Expr (Scope () c) a x
 eAbstractC1 _ ETrue = ETrue
 eAbstractC1 _ EFalse = EFalse
+eAbstractC1 _ (EString s) = EString s
 eAbstractC1 _ (EVar x) = EVar x
 eAbstractC1 a (ELam t b) = ELam (tAbstract1 a t) (hoistScope (eAbstractC1 a) b)
 eAbstractC1 a (EApp l r) = EApp (eAbstractC1 a l) (eAbstractC1 a r)
@@ -273,6 +279,8 @@ eAbstractC1 a (EConcat l r) = EConcat (eAbstractC1 a l) (eAbstractC1 a r)
 eAbstractC1 a (EFor t i o) = EFor (tAbstract1 a t) (eAbstractC1 a i) (hoistScope (eAbstractC1 a) o)
 eAbstractC1 a (EIf c t e) = EIf (eAbstractC1 a c) (eAbstractC1 a t) (eAbstractC1 a e)
 eAbstractC1 a (ERecord l) = ERecord (mapSnd (eAbstractC1 a) l)
+eAbstractC1 a (EProj l t r) = EProj l (tAbstract1 a t) (eAbstractC1 a r)
+eAbstractC1 a (ETable n t) = ETable n (tAbstract1 a t) -- not needed I think, should be base types..
 
 etlam :: Eq a => Monad c => a -> Kind -> Expr c a x -> Expr c a x
 etlam a k b = ETLam k (eAbstractC1 a b) -- this should be actual abstract, not my misnamed one, I think
@@ -280,8 +288,8 @@ etlam a k b = ETLam k (eAbstractC1 a b) -- this should be actual abstract, not m
 -- polyId' :: Expr Constructor String String
 -- polyId' = etlam "a" KType (elam "ex" (TT (CVar "a")) (EVar "ex"))
 
-polyId :: Expr Constructor a x
-polyId = ETLam KType $ ELam (TT $ toScope (CVar (B ()))) $ toScope (EVar (B ()))
+-- polyId :: Expr Constructor a x
+-- polyId = ETLam KType $ ELam (TT $ toScope (CVar (B ()))) $ toScope (EVar (B ()))
 
 traceId :: Constructor a -> Expr Constructor a x
 traceId tracetf = ETLam KType $ ELam (TT $ toScope (CApp (F <$> tracetf) (CVar (B ())))) $ toScope (EVar (B ()))
@@ -315,7 +323,7 @@ prettyExpr _ _ EEmptyList = text "[]"
 prettyExpr ns _ (ESingletonList e) = brackets $ prettyExpr ns False e
 prettyExpr ns p (EConcat l r) = pparens p $ prettyExpr ns True l <+> text "++" <+> prettyExpr ns True r
 prettyExpr (v:vs, tvs) p (EFor t i o) = pparens p $ hang 2 $
-  bold (text "for") <+> parens (text v <> typeAnnotation <+> text "<-" <+> prettyExpr (v:vs, tvs) False i) P.<$> prettyExpr (vs, tvs) False (instantiate1 (EVar v) o)
+  bold (text "for") <+> (hang 3 (parens (text v <> typeAnnotation <+> text "<-" P.<$> prettyExpr (v:vs, tvs) False i))) P.<$> prettyExpr (vs, tvs) False (instantiate1 (EVar v) o)
   where typeAnnotation = char ':' <+> prettyType tvs False t
 prettyExpr _ _ (ERecord []) = braces empty
 prettyExpr ns _ (ERecord l) = group $ char '{' <> (align $ printRec ns l)
@@ -325,6 +333,8 @@ prettyExpr ns p (EIf c t e) = pparens p $ group $
   bold (text "else") <+> prettyExpr ns False e
 prettyExpr ns p (EProj l _t e) = pparens p $
   prettyExpr ns True e <> char '.' <> blue (text l)
+prettyExpr (_, tvs) p (ETable n t) = pparens p $
+  bold (text "table") <+> text (show n) <+> prettyType tvs True t
 
 printRec :: ([String], [String]) -> [(String, Expr Constructor String String)] -> Doc
 printRec _ [] = char '}'
@@ -362,6 +372,7 @@ betaReduce (EFor t i o) = EFor t (betaReduce i) (hoistScope betaReduce o)
 betaReduce (EIf c t e) = EIf (betaReduce c) (betaReduce t) (betaReduce e)
 betaReduce (ERecord l) = ERecord (mapSnd betaReduce l)
 betaReduce (EProj l t e) = EProj l t (betaReduce e)
+betaReduce t@(ETable _ _) = t
 
 betaReduceN :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
 betaReduceN 0 e = e
@@ -376,7 +387,7 @@ ttype tracetf = TForall KType $
   TArrow (TT $ toScope $ CApp (fmap F tracetf) (CVar (B ())))
          (TT $ toScope $ CApp (fmap F tracetf) (CVar (B ())))
 
-trace' :: Constructor a -> x -> Type Constructor a -> Expr Constructor a x -> Expr Constructor a x
+trace' :: Eq a => Constructor a -> x -> Type Constructor a -> Expr Constructor a x -> Expr Constructor a x
 trace' _ _ _ (ELam _ _) = error "cannot trace lambda"
 trace' _ _ _ (ETLam _ _) = error "cannot trace Lambda"
 trace' _ _ _ (EApp _ _) = error "cannot trace app"
@@ -385,15 +396,20 @@ trace' tracetf _ (TT CBool) ETrue = ELam (ttype tracetf) $ toScope $
   EApp (ETApp (EVar (B ())) CBool) (EVariant "Lit" ETrue)
 trace' tracetf _ (TT CBool) EFalse = ELam (ttype tracetf) $ toScope $
   EApp (ETApp (EVar (B ())) CBool) (EVariant "Lit" EFalse)
+trace' tracetf _ (TT CString) (EString s) = ELam (ttype tracetf) $ toScope $
+  EApp (ETApp (EVar (B ())) CString) (EVariant "Lit" (EString s))
 trace' tracetf _ (TT c) (EVar x) = ELam (ttype tracetf) $ toScope (EApp (ETApp (EVar (B ())) c) (EVar (F x)))
 trace' tracetf _ _ EEmptyList = ELam (ttype tracetf) $ toScope $ EEmptyList
 trace' tracetf value (TT (CList c)) (ESingletonList e) = ELam (ttype tracetf) $ toScope $
   ESingletonList (EApp (fmap F (trace' tracetf value (TT c) e)) (EVar (B ())))
-trace' tracetf value t@(TT (CList c)) (EConcat l r) = ELam (ttype tracetf) $ toScope $
-  EConcat (EFor (TT (CApp tracetf c)) (EApp (fmap F $ trace' tracetf value t l) (EVar (B ()))) $ toScope $
-                (ESingletonList (EVar (B ()))))
-          (EFor (TT (CApp tracetf c)) (EApp (fmap F $ trace' tracetf value t r) (EVar (B ()))) $ toScope $
-                (ESingletonList (EVar (B ()))))
+trace' tracetf value t@(TT (CList _)) (EConcat l r) = ELam (ttype tracetf) $ toScope $
+  EConcat (EApp (F <$> trace' tracetf value t l) (EVar (B ())))
+          (EApp (F <$> trace' tracetf value t r) (EVar (B ())))
+-- trace' tracetf value t@(TT (CList c)) (EConcat l r) = ELam (ttype tracetf) $ toScope $
+  -- EConcat (EFor (TT (CApp tracetf c)) (EApp (fmap F $ trace' tracetf value t l) (EVar (B ()))) $ toScope $
+                -- (ESingletonList (EVar (B ()))))
+          -- (EFor (TT (CApp tracetf c)) (EApp (fmap F $ trace' tracetf value t r) (EVar (B ()))) $ toScope $
+                -- (ESingletonList (EVar (B ()))))
 trace' tracetf value (TT (CRecord row)) (ERecord flds) = ELam (ttype tracetf) $ toScope $
   ERecord $
     zipWith (\(l, t) (l', x) -> assert (l == l') $
@@ -405,19 +421,28 @@ trace' tracetf value (TT (CRecord row)) (ERecord flds) = ELam (ttype tracetf) $ 
     rowToList' (CRowCons l c r) = (l, c) : rowToList' r
     rowToList' _ = error "not a row"
     rowToList = sortWith fst . rowToList'
+-- ([| M |] t).l
+trace' tracetf value (TT _) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
+  EProj l (TT (CApp tracetf rt))
+    (EApp (F <$> trace' tracetf value (TT rt) r) (traceId tracetf))
+-- t (TRACE C) ([| M |] tid).l 
+-- trace' tracetf value (TT c) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
+  -- EApp (ETApp (EVar (B ())) (CApp tracetf c))
+       -- (EProj l (TT (CApp tracetf rt))
+          -- (EApp (F <$> trace' tracetf value (TT rt) r) (traceId tracetf)))
 -- trace' tracetf value (TT c) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
   -- EProj l (TT (CApp tracetf rt))
     -- (EApp (F <$> trace' tracetf value (TT rt) r)
        -- (ETLam KType (ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
                      -- (EApp (ETApp (EVar (F (B ()))) (toScope (F <$> CApp tracetf c)))
                       -- (EVariant "Proj" (ERecord [("label", EString l), ("field", EVar (B ()))]))))))
-trace' tracetf value (TT c) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
--- \t. t (TRACE C) (Proj {label = a, field = ([| M |] tid).a})
-  EApp (ETApp (EVar (B ())) (CApp tracetf c))
-       (EVariant "Proj" (ERecord [
-         ("label", EString l),
-         ("field", EProj l (TT (CRecord {- TODO map TRACE over row -} CRowNil))
-                           (EApp (F <$> trace' tracetf value (TT rt) r) (traceId tracetf)))]))
+-- \t. (TRACE C) (Proj {label = a, field = ([| M |] tid).a})
+-- trace' tracetf value (TT c) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
+  -- EApp (ETApp (EVar (B ())) (CApp tracetf c))
+       -- (EVariant "Proj" (ERecord [
+         -- ("label", EString l),
+         -- ("field", EProj l (TT (CRecord {- TODO map TRACE over row -} CRowNil))
+                           -- (EApp (F <$> trace' tracetf value (TT rt) r) (traceId tracetf)))]))
 trace' tracetf value (TT (CList nElementC)) (EFor (TT mElementC) m n) = ELam (ttype tracetf) $ toScope $
   EFor (TT (CApp tracetf mElementC))
        (EApp (fmap F (trace' tracetf value (TT (CList mElementC)) m)) (traceId tracetf)) $ toScope $
@@ -439,6 +464,20 @@ trace' tracetf value (TT c) (EIf eCond eThen eElse) = ELam (ttype tracetf) $ toS
                     EVariant "IfElse" (ERecord [("cond", liftCE (tCondId (F . F))), ("else", EVar (B ()))])))
   where
     tCondId lifting = EApp (lifting <$> trace' tracetf value (TT CBool) eCond) (traceId tracetf)
+trace' tracetf _ (TT (CList (CRecord row))) (ETable n (TT (CRecord row'))) = assert (row == row') $
+  ELam (ttype tracetf) $ toScope $
+  EFor (TT (CApp tracetf (CRecord row')))
+       (ETable n (TT (CRecord row'))) $ toScope $
+       ESingletonList (ERecord (map fieldf (rowToList row)))
+  where
+    rowToList' CRowNil = []
+    rowToList' (CRowCons l c r) = (l, c) : rowToList' r
+    rowToList' _ = error "not a row"
+    rowToList = sortWith fst . rowToList'
+
+    -- fieldf :: (Label, Constructor a) -> (Label, Expr Constructor a (Var () (Var () x)))
+    fieldf (l, c) = (l, EApp (ETApp (EVar (F (B ()))) c)
+                             (EVariant "Row" (ERecord [("table", EString n), ("column", EString l), ("data", EProj l (TT (CRecord row')) (EVar (B ())))])))
 -- trace' _ _ TBool _ = error $ "trace has to have TT type"
 -- trace' _ _ (TForall _ _) _ = error $ "trace has to have TT type"
 -- trace' _ _ (TArrow _ _) _ = error $ "trace has to have TT type"
@@ -448,7 +487,13 @@ trace' tracetf value (TT c) (EIf eCond eThen eElse) = ELam (ttype tracetf) $ toS
 -- trace' _ _ (TT (CVar _)) _ = error $ "dunno what to do with a type variable"
 -- trace' _ _ (TT (CLambda _ _)) _ = error $ "dunno what to do with a type lambda"
 -- trace' _ _ (TT (CApp _ _)) _ = error $ "dunno what to do with a type app"
--- trace' _ _ (TT (CList _)) _ = error $ "clist case missing?"
+-- trace' _ _ (TT (CList (CRecord _))) _ = error $ "clist crecord case missing?"
+-- trace' _ _ (TT (CList CString)) (EFor _ _ _) = error $ "clist cstring efor case missing?"
+-- trace' _ _ (TT (CList CString)) (EVar _) = error $ "clist cstring evar case missing?"
+-- trace' _ _ (TT (CList CString)) (ESingletonList _) = error $ "clist cstring singleton case missing?"
+-- trace' _ _ (TT (CList CString)) (ETable _ _) = error $ "clist cstring etable case missing?"
+-- -- trace' _ _ (TT (CList CString)) _ = error $ "clist cstring case missing?"
+-- -- trace' _ _ (TT (CList _)) _ = error $ "clist case missing?"
 -- trace' _ _ (TT (CTrace _)) _ = error $ "ctrace case missing?"
 -- trace' _ _ (TT (CRecord _)) ETrue = error $ "crecord true case missing?"
 -- trace' _ _ (TT (CRecord _)) EFalse = error $ "crecord false case missing?"
@@ -577,6 +622,7 @@ putE e = do
 
 someFunc :: IO ()
 someFunc = do
+  {-
   let notTrue = EIf ETrue EFalse ETrue
   putE notTrue
   putE $ runTrace2 (TT CBool) notTrue
@@ -616,7 +662,7 @@ someFunc = do
   -- putE $ betaReduceN 8 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
   putE $ betaReduceN 9 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
   putE $ runTrace2 (TT (CList CBool)) forIf
-
+  -}
 
   let record1 = ERecord [("b", ETrue), ("a", EFalse)]
   putE $ record1
@@ -638,6 +684,14 @@ someFunc = do
   putE projRecRec
   putE $ betaReduceN 11 $ EApp (trace (TT CBool) projRecRec) (traceId (CVar "TRACE"))
   putE $ runTrace2 (TT CBool) projRecRec
+
+  let tableABs = ETable "abs" (TT (CRecord (CRowCons "a" CString (CRowCons "b" CBool CRowNil))))
+  putE tableABs
+  putE $ betaReduceN 3 $ EApp (trace (TT (CList (CRecord (CRowCons "a" CString (CRowCons "b" CBool CRowNil))))) tableABs) (traceId (CVar "TRACE"))
+
+  let asFromTable = efor "x" (TT (CRecord (CRowCons "a" CString (CRowCons "b" CBool CRowNil)))) tableABs (ESingletonList (EProj "a" (TT (CRecord (CRowCons "a" CString (CRowCons "b" CBool CRowNil)))) (EVar "x")))
+  putE asFromTable
+  putE $ betaReduceN 6 $ EApp (trace (TT (CList CString)) asFromTable) (traceId (CVar "TRACE"))
 
 {-  let projForNested = efor "x" (TT (CRecord (CRowCons "b" CBool (CRowCons "a" CBool CRowNil)))) forNested (ESingletonList (EProj "a" (TT (CRecord (CRowCons "a" CBool (CRowCons "b" CBool CRowNil)))) (EVar "x")))
   putE projForNested
