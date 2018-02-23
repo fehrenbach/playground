@@ -39,7 +39,7 @@ data Kind = KType | KArrow Kind Kind
 
 prettyKind :: Kind -> Doc
 prettyKind KType = text "Type"
-prettyKind (KArrow l r) = parens $ prettyKind l <+> text "->" <+> prettyKind r 
+prettyKind (KArrow l r) = parens $ prettyKind l <+> text "->" <+> prettyKind r
 
 type Label = String
 
@@ -141,7 +141,7 @@ prettyType [] _ _ = error "ran out of type variables during type pretty printing
 prettyType _ _ TBool = text "Bool"
 prettyType avs _ (TT c) = char 'T' <> parens (prettyConstructor avs False c)
 prettyType (av:avs) p (TForall k body) = pparens p $
-  char '∀' <> text av <> kindAnnotation <> char '.' <> prettyType avs p (tInstantiate1 (CVar av) body)
+  bold (char '∀') <> text av <> kindAnnotation <> char '.' <> prettyType avs p (tInstantiate1 (CVar av) body)
   where kindAnnotation = case k of
           KType -> empty
           _ -> char ':' <> prettyKind k
@@ -183,7 +183,7 @@ data Expr c a x
   -- the Type is the type of the record. I need this for tracing.
   | EProj Label (Type c a) (Expr c a x)
   | ETable String (Type c a) -- type of ELEMENTS/ROWS that is, a record type, not a list type
-  | EEq (Type c a) (Expr c a x) (Expr c a x)
+  | EEq (Type c a) (Expr c a x) (Expr c a x) -- equality specialized to a type
   deriving (Functor)
 
 instance (Eq a, Monad c) => Applicative (Expr c a) where
@@ -313,16 +313,16 @@ prettyExpr _ _ EFalse = text "false"
 prettyExpr _ _ (EVar x) = text x
 prettyExpr _ _ (EString s) = text (show s)
 prettyExpr (v:vs, tvs) p (ELam t b) = pparens p $ hang 2 $ group $
-  char 'λ' <> text v <> char ':' <> prettyType tvs False t <> char '.' P.<$$> prettyExpr (vs, tvs) False (instantiate1 (EVar v) b)
+  bold (char 'λ') <> text v <> char ':' <> prettyType tvs False t <> char '.' P.<$$> prettyExpr (vs, tvs) False (instantiate1 (EVar v) b)
 prettyExpr (vs, tv:tvs) p (ETLam k b) = pparens p $ hang 2 $ group $
-  char 'Λ' <> text tv <> kindAnnotation <> char '.' P.<$$> prettyExpr (vs, tvs) False (eInstantiateC1 (CVar tv) b)
+  bold (char 'Λ') <> text tv <> kindAnnotation <> char '.' P.<$$> prettyExpr (vs, tvs) False (eInstantiateC1 (CVar tv) b)
   where kindAnnotation = case k of
           KType -> empty
           _ -> char ':' <> prettyKind k
 prettyExpr ns p (EVariant l e) = pparens p $
   dullgreen (text l) <+> prettyExpr ns True e
-prettyExpr ns p (EApp l r) = pparens p $
-  prettyExpr ns (not $ isApp l) l </> prettyExpr ns True r
+prettyExpr ns p (EApp l r) = pparens p $ hang 2 $
+  prettyExpr ns (not $ isApp l) l P.<$> prettyExpr ns True r
 prettyExpr (vs, tvs) p (ETApp e c) = pparens p $
   prettyExpr (vs, tvs) (not $ isApp e) e </> prettyConstructor tvs True c
 prettyExpr _ _ EEmptyList = text "[]"
@@ -333,7 +333,7 @@ prettyExpr (v:vs, tvs) p (EFor t i o) = pparens p $ hang 2 $
   bold (text "for") <+> (hang 3 (parens (text v <> typeAnnotation <+> text "<-" P.<$> prettyExpr (v:vs, tvs) False i))) P.<$> prettyExpr (vs, tvs) False (instantiate1 (EVar v) o)
   where typeAnnotation = char ':' <+> prettyType tvs False t
 prettyExpr _ _ (ERecord []) = braces empty
-prettyExpr ns _ (ERecord l) = group $ char '{' <> (align $ printRec ns l)
+prettyExpr ns _ (ERecord l) = group $ braces $ align (cat (punctuate (comma <> space) (map (\(lbl, e) -> blue (text lbl) <+> char '=' <+> prettyExpr ns False e) l)))
 prettyExpr ns p (EIf c t e) = pparens p $ group $
   bold (text "if") <+> prettyExpr ns False c P.<$>
   bold (text "then") <+> prettyExpr ns False t P.<$>
@@ -343,10 +343,6 @@ prettyExpr ns p (EProj l _t e) = pparens p $
 prettyExpr (_, tvs) p (ETable n t) = pparens p $
   bold (text "table") <+> text (show n) <+> prettyType tvs True t
 
-printRec :: ([String], [String]) -> [(String, Expr Constructor String String)] -> Doc
-printRec _ [] = char '}'
-printRec ns [(l,x)] = blue (text l) <+> char '=' <+> prettyExpr ns False x <> char '}'
-printRec ns ((l,x):r) = blue (text l) <+> char '=' <+> prettyExpr ns False x <> char ',' </> printRec ns r
 {-
 
 -- deriveShow1 ''Type
@@ -433,7 +429,7 @@ trace' tracetf value (TT (CRecord row)) (ERecord flds) = ELam (ttype tracetf) $ 
 trace' tracetf value (TT _) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
   EProj l (TT (CApp tracetf rt))
     (EApp (F <$> trace' tracetf value (TT rt) r) (traceId tracetf))
--- t (TRACE C) ([| M |] tid).l 
+-- t (TRACE C) ([| M |] tid).l
 -- trace' tracetf value (TT c) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
   -- EApp (ETApp (EVar (B ())) (CApp tracetf c))
        -- (EProj l (TT (CApp tracetf rt))
@@ -461,7 +457,7 @@ trace' tracetf value (TT (CList nElementC)) (EFor (TT mElementC) m n) = ELam (tt
             EApp (ETApp (EVar (F (F (B ())))) (toScope (CTrace (CVar (B ())))))
                  (EVariant "For" (ERecord [("in", EVar (F (B ()))), ("out", EVar (B ()))]))
 trace' tracetf value (TT c) (EIf eCond eThen eElse) = ELam (ttype tracetf) $ toScope $
-  EIf (EApp (EVar (F value)) (tCondId F))
+  EIf (EApp (ETApp (EVar (F value)) CBool) (tCondId F))
       (EApp (F <$> trace' tracetf value (TT c) eThen)
             (ETLam KType $ ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
                EApp (ETApp (EVar (F (B ()))) (toScope (F <$> CApp tracetf c))) $
@@ -643,7 +639,7 @@ someFunc = do
   putE $ runTrace2 (TT (CList CBool)) constantFor
   let simpleFor = efor "m" (TT (CVar "am")) (EVar "M") (EVar "N") --(ESingeltonList (EVar "m"))
   putE simpleFor
-  
+
   -- putE $ betaReduceN 0 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
   -- putE $ betaReduceN 1 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
   -- putE $ betaReduceN 2 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
@@ -719,11 +715,11 @@ someFunc = do
 
   let eqEq = EEq (TT CBool) eqLists ETrue
   putE eqEq
-  putE $ betaReduceN 2 $ EApp (trace (TT CBool) eqEq) (traceId (CVar "TRACE"))
-  putE $ betaReduceN 4 $ EApp (trace (TT CBool) eqEq) (traceId (CVar "TRACE"))
-  putE $ betaReduceN 6 $ EApp (trace (TT CBool) eqEq) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 2 $ EApp (trace (TT CBool) eqEq) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 4 $ EApp (trace (TT CBool) eqEq) (traceId (CVar "TRACE"))
+  -- putE $ betaReduceN 6 $ EApp (trace (TT CBool) eqEq) (traceId (CVar "TRACE"))
   putE $ betaReduceN 8 $ EApp (trace (TT CBool) eqEq) (traceId (CVar "TRACE"))
-  
+
 {-  let projForNested = efor "x" (TT (CRecord (CRowCons "b" CBool (CRowCons "a" CBool CRowNil)))) forNested (ESingletonList (EProj "a" (TT (CRecord (CRowCons "a" CBool (CRowCons "b" CBool CRowNil)))) (EVar "x")))
   putE projForNested
   putE $ betaReduceN 12 $ EApp (trace (TT (CList CBool)) projForNested) (traceId (CVar "TRACE"))
