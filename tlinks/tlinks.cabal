@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: c1f15c12d9316a516b8f67e195a5f7a7443ed13d8f19ac10c9f12f361faf7ea3
+-- hash: afeeb6f46e25014115be190112b6e398c22a78734084d5731ad54fb3ed69a5b8
 
 name:           tlinks
 version:        0.1.0.0
@@ -38,7 +38,6 @@ library
     , bound
     , deriving-compat
     , mmorph
-    , mtl
   default-language: Haskell2010
 
 executable tlinks-exe
@@ -54,7 +53,6 @@ executable tlinks-exe
     , bound
     , deriving-compat
     , mmorph
-    , mtl
     , tlinks
   default-language: Haskell2010
 
@@ -72,6 +70,5 @@ test-suite tlinks-test
     , bound
     , deriving-compat
     , mmorph
-    , mtl
     , tlinks
   default-language: Haskell2010

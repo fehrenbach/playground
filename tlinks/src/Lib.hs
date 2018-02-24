@@ -12,7 +12,6 @@ module Lib
 import Bound ((>>>=), Var(B,F))
 import Bound.Scope.Simple
 import Control.Exception (assert)
-import Control.Monad.Reader
 import GHC.Exts (sortWith)
 import Control.Monad (ap)
 import Control.Monad.Morph (lift)
@@ -343,17 +342,6 @@ prettyExpr ns p (EProj l _t e) = pparens p $
 prettyExpr (_, tvs) p (ETable n t) = pparens p $
   bold (text "table") <+> text (show n) <+> prettyType tvs True t
 
-{-
-
--- deriveShow1 ''Type
--- instance Show a => Show (Type a) where showsPrec = showsPrec1
-
-
--- bitraverse?
--- freeVariables :: Expr (Type String) String -> [String]
--- freeVariables = bitraverse
--}
-
 betaReduce :: Eq a => Monad c => Expr c a x -> Expr c a x
 betaReduce ETrue = ETrue
 betaReduce EFalse = EFalse
@@ -383,8 +371,12 @@ betaReduceN 0 e = e
 betaReduceN n e = betaReduceN (n-1) (betaReduce e)
 
 
--- ttype :: Constructor String -> Type Constructor String
--- ttype c = TArrow (TT (CApp (CVar "TRACE") c)) (TT (CApp (CVar "TRACE") c))
+rowToList :: Constructor a -> [(Label, Constructor a)]
+rowToList = sortWith fst . rowToList'
+  where
+    rowToList' CRowNil = []
+    rowToList' (CRowCons l c r) = (l, c) : rowToList' r
+    rowToList' _ = error "not a row"
 
 ttype :: Constructor a -> Type Constructor a
 ttype tracetf = TForall KType $
@@ -396,231 +388,67 @@ trace' _ _ _ (ELam _ _) = error "cannot trace lambda"
 trace' _ _ _ (ETLam _ _) = error "cannot trace Lambda"
 trace' _ _ _ (EApp _ _) = error "cannot trace app"
 trace' _ _ _ (EVariant _ _) = error "cannot trace variant constructor"
-trace' tracetf _ (TT CBool) ETrue = ELam (ttype tracetf) $ toScope $
-  EApp (ETApp (EVar (B ())) CBool) (EVariant "Lit" ETrue)
-trace' tracetf _ (TT CBool) EFalse = ELam (ttype tracetf) $ toScope $
-  EApp (ETApp (EVar (B ())) CBool) (EVariant "Lit" EFalse)
-trace' tracetf _ (TT CString) (EString s) = ELam (ttype tracetf) $ toScope $
-  EApp (ETApp (EVar (B ())) CString) (EVariant "Lit" (EString s))
-trace' tracetf _ (TT c) (EVar x) = ELam (ttype tracetf) $ toScope (EApp (ETApp (EVar (B ())) c) (EVar (F x)))
-trace' tracetf _ _ EEmptyList = ELam (ttype tracetf) $ toScope $ EEmptyList
-trace' tracetf value (TT (CList c)) (ESingletonList e) = ELam (ttype tracetf) $ toScope $
-  ESingletonList (EApp (fmap F (trace' tracetf value (TT c) e)) (EVar (B ())))
-trace' tracetf value t@(TT (CList _)) (EConcat l r) = ELam (ttype tracetf) $ toScope $
-  EConcat (EApp (F <$> trace' tracetf value t l) (EVar (B ())))
-          (EApp (F <$> trace' tracetf value t r) (EVar (B ())))
--- trace' tracetf value t@(TT (CList c)) (EConcat l r) = ELam (ttype tracetf) $ toScope $
-  -- EConcat (EFor (TT (CApp tracetf c)) (EApp (fmap F $ trace' tracetf value t l) (EVar (B ()))) $ toScope $
-                -- (ESingletonList (EVar (B ()))))
-          -- (EFor (TT (CApp tracetf c)) (EApp (fmap F $ trace' tracetf value t r) (EVar (B ()))) $ toScope $
-                -- (ESingletonList (EVar (B ()))))
-trace' tracetf value (TT (CRecord row)) (ERecord flds) = ELam (ttype tracetf) $ toScope $
-  ERecord $
-    zipWith (\(l, t) (l', x) -> assert (l == l') $
-               (l, EApp (F <$> trace' tracetf value (TT t) x) (EVar (B ()))))
-    (rowToList row)
-    (sortWith fst flds)
+trace' tracetf value (TT constructor) expression = tr constructor expression
   where
-    rowToList' CRowNil = []
-    rowToList' (CRowCons l c r) = (l, c) : rowToList' r
-    rowToList' _ = error "not a row"
-    rowToList = sortWith fst . rowToList'
--- ([| M |] t).l
-trace' tracetf value (TT _) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
-  EProj l (TT (CApp tracetf rt))
-    (EApp (F <$> trace' tracetf value (TT rt) r) (traceId tracetf))
--- t (TRACE C) ([| M |] tid).l
--- trace' tracetf value (TT c) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
-  -- EApp (ETApp (EVar (B ())) (CApp tracetf c))
-       -- (EProj l (TT (CApp tracetf rt))
-          -- (EApp (F <$> trace' tracetf value (TT rt) r) (traceId tracetf)))
--- trace' tracetf value (TT c) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
-  -- EProj l (TT (CApp tracetf rt))
-    -- (EApp (F <$> trace' tracetf value (TT rt) r)
-       -- (ETLam KType (ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
-                     -- (EApp (ETApp (EVar (F (B ()))) (toScope (F <$> CApp tracetf c)))
-                      -- (EVariant "Proj" (ERecord [("label", EString l), ("field", EVar (B ()))]))))))
--- \t. (TRACE C) (Proj {label = a, field = ([| M |] tid).a})
--- trace' tracetf value (TT c) (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
-  -- EApp (ETApp (EVar (B ())) (CApp tracetf c))
-       -- (EVariant "Proj" (ERecord [
-         -- ("label", EString l),
-         -- ("field", EProj l (TT (CRecord {- TODO map TRACE over row -} CRowNil))
-                           -- (EApp (F <$> trace' tracetf value (TT rt) r) (traceId tracetf)))]))
-trace' tracetf value (TT (CList nElementC)) (EFor (TT mElementC) m n) = ELam (ttype tracetf) $ toScope $
-  EFor (TT (CApp tracetf mElementC))
-       (EApp (fmap F (trace' tracetf value (TT (CList mElementC)) m)) (traceId tracetf)) $ toScope $
-  -- Right, so this fmap is where we keep the "same" variable that was
-  -- bound in the body before.
-    EApp (fmap (\v -> case v of F x -> F (F x); B () -> B ()) (trace' tracetf (F value) (TT (CList nElementC)) (fromScope n))) $
-         ETLam KType $ ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
-            EApp (ETApp (EVar (F (F (B ())))) (toScope (CTrace (CVar (B ())))))
-                 (EVariant "For" (ERecord [("in", EVar (F (B ()))), ("out", EVar (B ()))]))
-trace' tracetf value (TT c) (EIf eCond eThen eElse) = ELam (ttype tracetf) $ toScope $
-  EIf (EApp (ETApp (EVar (F value)) CBool) (tCondId F))
-      (EApp (F <$> trace' tracetf value (TT c) eThen)
+    tr CBool ETrue = ELam (ttype tracetf) $ toScope $
+      EApp (ETApp (EVar (B ())) CBool) (EVariant "Lit" ETrue)
+    tr CBool EFalse = ELam (ttype tracetf) $ toScope $
+      EApp (ETApp (EVar (B ())) CBool) (EVariant "Lit" EFalse)
+    tr CString (EString s) = ELam (ttype tracetf) $ toScope $
+      EApp (ETApp (EVar (B ())) CString) (EVariant "Lit" (EString s))
+    tr c (EVar x) = ELam (ttype tracetf) $ toScope (EApp (ETApp (EVar (B ())) c) (EVar (F x)))
+    tr _ EEmptyList = ELam (ttype tracetf) $ toScope $ EEmptyList
+    tr (CList c) (ESingletonList e) = ELam (ttype tracetf) $ toScope $
+      ESingletonList (EApp (fmap F (tr c e)) (EVar (B ())))
+    tr (CList c) (EConcat l r) = ELam (ttype tracetf) $ toScope $
+      EConcat (EApp (F <$> tr (CList c) l) (EVar (B ())))
+              (EApp (F <$> tr (CList c) r) (EVar (B ())))
+    tr (CRecord row) (ERecord flds) = ELam (ttype tracetf) $ toScope $
+      ERecord $ zipWith (\(l, t) (l', x) -> assert (l == l') $
+                          (l, EApp (F <$> tr t x) (EVar (B ()))))
+      (rowToList row)
+      (sortWith fst flds)
+    tr _ (EProj l (TT rt) r) = ELam (ttype tracetf) $ toScope $
+      EProj l (TT (CApp tracetf rt))
+      (EApp (F <$> tr rt r) (traceId tracetf))
+    tr (CList nElementC) (EFor (TT mElementC) m n) = ELam (ttype tracetf) $ toScope $
+      EFor (TT (CApp tracetf mElementC))
+      (EApp (fmap F (tr (CList mElementC) m)) (traceId tracetf)) $ toScope $
+      -- Right, so this fmap is where we keep the "same" variable that
+      -- was bound in the body before.
+      EApp (fmap (\v -> case v of F x -> F (F x); B () -> B ()) (trace' tracetf (F value) (TT (CList nElementC)) (fromScope n))) $
+      ETLam KType $ ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
+      EApp (ETApp (EVar (F (F (B ())))) (toScope (CTrace (CVar (B ())))))
+      (EVariant "For" (ERecord [("in", EVar (F (B ()))), ("out", EVar (B ()))]))
+    tr c (EIf eCond eThen eElse) = ELam (ttype tracetf) $ toScope $
+      EIf (EApp (ETApp (EVar (F value)) CBool) (tCondId F))
+          (EApp (F <$> tr c eThen)
             (ETLam KType $ ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
                EApp (ETApp (EVar (F (B ()))) (toScope (F <$> CApp tracetf c))) $
                     EVariant "IfThen" (ERecord [("cond", liftCE (tCondId (F . F))), ("then", EVar (B ()))])))
-      (EApp (F <$> trace' tracetf value (TT c) eElse)
+      (EApp (F <$> tr c eElse)
             (ETLam KType $ ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
                EApp (ETApp (EVar (F (B ()))) (toScope (F <$> CApp tracetf c))) $
                     EVariant "IfElse" (ERecord [("cond", liftCE (tCondId (F . F))), ("else", EVar (B ()))])))
-  where
-    tCondId lifting = EApp (lifting <$> trace' tracetf value (TT CBool) eCond) (traceId tracetf)
-trace' tracetf _ (TT (CList (CRecord row))) (ETable n (TT (CRecord row'))) = assert (row == row') $
-  ELam (ttype tracetf) $ toScope $
-  EFor (TT (CApp tracetf (CRecord row')))
-       (ETable n (TT (CRecord row'))) $ toScope $
-       ESingletonList (ERecord (map fieldf (rowToList row)))
-  where
-    rowToList' CRowNil = []
-    rowToList' (CRowCons l c r) = (l, c) : rowToList' r
-    rowToList' _ = error "not a row"
-    rowToList = sortWith fst . rowToList'
-    -- fieldf :: (Label, Constructor a) -> (Label, Expr Constructor a (Var () (Var () x)))
-    fieldf (l, c) = (l, EApp (ETApp (EVar (F (B ()))) c)
-                             (EVariant "Row" (ERecord [("table", EString n), ("column", EString l), ("data", EProj l (TT (CRecord row')) (EVar (B ())))])))
-trace' tracetf value (TT CBool) (EEq t l r) = ELam (ttype tracetf) $ toScope $
-  EApp (ETApp (EVar (B ())) CBool)
-       (EVariant "OpEq" (ERecord [("left", EApp (F <$> trace' tracetf value t l) (traceId tracetf)),
-                                  ("right", EApp (F <$> trace' tracetf value t r) (traceId tracetf))]))
--- trace' _ _ TBool _ = error $ "trace has to have TT type"
--- trace' _ _ (TForall _ _) _ = error $ "trace has to have TT type"
--- trace' _ _ (TArrow _ _) _ = error $ "trace has to have TT type"
--- trace' _ _ (TList _) _ = error $ "trace has to have TT type"
--- trace' _ _ (TTrace _) _ = error $ "trace has to have TT type"
--- trace' _ _ (TT CBool) _ = error $ "cbool case missing?"
--- trace' _ _ (TT (CVar _)) _ = error $ "dunno what to do with a type variable"
--- trace' _ _ (TT (CLambda _ _)) _ = error $ "dunno what to do with a type lambda"
--- trace' _ _ (TT (CApp _ _)) _ = error $ "dunno what to do with a type app"
--- trace' _ _ (TT (CList (CRecord _))) _ = error $ "clist crecord case missing?"
--- trace' _ _ (TT (CList CString)) (EFor _ _ _) = error $ "clist cstring efor case missing?"
--- trace' _ _ (TT (CList CString)) (EVar _) = error $ "clist cstring evar case missing?"
--- trace' _ _ (TT (CList CString)) (ESingletonList _) = error $ "clist cstring singleton case missing?"
--- trace' _ _ (TT (CList CString)) (ETable _ _) = error $ "clist cstring etable case missing?"
--- -- trace' _ _ (TT (CList CString)) _ = error $ "clist cstring case missing?"
--- -- trace' _ _ (TT (CList _)) _ = error $ "clist case missing?"
--- trace' _ _ (TT (CTrace _)) _ = error $ "ctrace case missing?"
--- trace' _ _ (TT (CRecord _)) ETrue = error $ "crecord true case missing?"
--- trace' _ _ (TT (CRecord _)) EFalse = error $ "crecord false case missing?"
--- trace' _ _ (TT (CRecord _)) (EString _) = error $ "crecord string case missing?"
--- trace' _ _ (TT (CRecord _)) (ETApp _ _) = error $ "crecord tapp case missing?"
--- trace' _ _ (TT (CRecord _)) (ESingletonList _) = error $ "crecord esingletonlist case missing?"
--- trace' _ _ (TT (CRecord _)) (EConcat _ _) = error $ "crecord econcat case missing?"
--- trace' _ _ (TT (CRecord _)) (EFor _ _ _) = error $ "crecord efor case missing?"
--- trace' _ _ (TT (CRowCons _ _ _)) _ = error $ "crowcons case missing?"
--- trace' _ _ (TT CRowNil) _ = error $ "crownil case missing?"
-trace' _ _ _t _e = error $ "missing case in trace' or nonsensical type? "
+      where
+        tCondId lifting = EApp (lifting <$> tr CBool eCond) (traceId tracetf)
+    tr (CList (CRecord row)) (ETable n (TT (CRecord row'))) = assert (row == row') $
+      ELam (ttype tracetf) $ toScope $
+      EFor (TT (CApp tracetf (CRecord row')))
+           (ETable n (TT (CRecord row'))) $ toScope $
+           ESingletonList (ERecord (map fieldf (rowToList row)))
+      where
+        -- fieldf :: (Label, Constructor a) -> (Label, Expr Constructor a (Var () (Var () x)))
+        fieldf (l, c) = (l, EApp (ETApp (EVar (F (B ()))) c)
+                                 (EVariant "Row" (ERecord [("table", EString n), ("column", EString l), ("data", EProj l (TT (CRecord row')) (EVar (B ())))])))
+    tr CBool (EEq (TT t) l r) = ELam (ttype tracetf) $ toScope $
+      EApp (ETApp (EVar (B ())) CBool)
+           (EVariant "OpEq" (ERecord [("left", EApp (F <$> tr t l) (traceId tracetf)),
+                                      ("right", EApp (F <$> tr t r) (traceId tracetf))]))
+trace' _ _ _ _ = error "trace called with non-TT(c) type"
 
 trace :: Type Constructor String -> Expr Constructor String String -> Expr Constructor String String
 trace = trace' (CVar "TRACE") "value"
-
-trace2 :: forall a x.
-  Eq a => Eq x =>
-  Scope () (Expr Constructor a) x ->
-  Type Constructor a ->
-  Expr Constructor a x ->
-  Reader (Constructor a, x) (Expr Constructor a x)
-trace2 ctx (TT _) ETrue =
-  return $ instantiate1 (EVariant "Lit" ETrue) ctx
-trace2 ctx (TT _) EFalse =
-  return $ instantiate1 (EVariant "Lit" EFalse) ctx
-trace2 ctx (TT _) (EVar x) =
-  return $ instantiate1 (EVar x) ctx
-trace2 ctx (TT t) (EIf eCond eThen eElse) = do
-  (_, value) <- ask
-  tCond <- trace2 (toScope (EVar (B ()))) (TT CBool) eCond
-  tThen <- trace2 (toScope (EVariant "IfThen" (ERecord [("cond", F <$> tCond), ("then", fromScope ctx)]))) (TT t) eThen
-  tElse <- trace2 (toScope (EVariant "IfElse" (ERecord [("cond", F <$> tCond), ("else", fromScope ctx)]))) (TT t) eElse
-  return $ EIf (EApp (ETApp (EVar value) (CTrace CBool)) tCond) tThen tElse
-trace2 ctx (TT (CList elementType)) (ESingletonList e) = do
-  tE <- trace2 ctx (TT elementType) e
-  return (ESingletonList tE)
-trace2 ctx (TT (CRecord rowType)) (ERecord fields) = do
-  tFields <- traverse (\(l, t, x) -> trace2 ctx (TT t) x >>= return . (l,))
-               (zipWith (\(l, t) (l', x) -> assert (l == l') $ (l, t, x))
-                 (rowToList rowType)
-                 (sortWith fst fields))
-  return $ ERecord tFields
-  where
-    rowToList' CRowNil = []
-    rowToList' (CRowCons l c r) = (l, c) : rowToList' r
-    rowToList' _ = error "not a row"
-    rowToList = sortWith fst . rowToList'
--- TODO nested FORs have their traces inside out
-trace2 ctx (TT (CList outputElementType)) (EFor (TT inputElementType) eIn eOut) = do
-  (tracetf, value) <- ask
-  tIn <- trace2 (toScope (EVar (B ()))) (TT (CList inputElementType)) eIn
-  return $ EFor (TT (CApp tracetf inputElementType)) tIn $ toScope $
-    -- fromScope $ mapScope id F ctx    does the same as the weird fmap in the old trace'
-    -- fmap (\v -> case v of F x -> F (F x); B () -> B ()) (fromScope ctx)
-    runReader (trace2 (toScope (EVariant "For" (ERecord [("in", EVar (F (B ()))),
-                                                         ("out", fromScope $ mapScope id F ctx)])))
-                (TT (CList outputElementType)) (fromScope eOut)) (tracetf, F value)
-trace2 ctx (TT (CList elementType)) (EConcat l r) = do
-  tL <- trace2 ctx (TT (CList elementType)) l
-  tR <- trace2 ctx (TT (CList elementType)) r
-  return $ EConcat tL tR
-trace2 _ (TT (CList _)) EEmptyList = return EEmptyList
-trace2 ctx (TT fieldType) (EProj l recordType eRecord) = do
-  (tracetf, _) <- ask
-  tRecord <- trace2 (toScope (EVar (B ()))) recordType eRecord
-  return $ instantiate1 (EVariant "Proj" (ERecord [("label", EString l), ("field", EProj l (TT (CApp tracetf fieldType)) tRecord)])) ctx
-
-  {-
-trace2 f (TT _) (EVar x) =
-  return (f (EVar x))
-trace2 f (TT t) (EIf eCond eThen eElse) = do
-  (_, value) <- ask
-  eCond' <- trace2 _ (TT CBool) eCond
-  eThen' <- trace2 _ {-(f . (\th -> EVariant "IfThen" (ERecord [("cond", eCond'), ("then", th)])))-} (TT t) eThen
-  eElse' <- trace2 _ {-(f . (\el -> EVariant "IfElse" (ERecord [("cond", eCond'), ("else", el)])))-} (TT t) eElse
-  let valCond = EApp (ETApp (EVar value) (CTrace CBool)) eCond'
-  return $ EIf valCond eThen' eElse'
-trace2 f (TT (CList elementType)) (ESingletonList e) = do
-  e' <- trace2 f (TT elementType) e
-  return (ESingletonList e')
-trace2 f (TT (CRecord rowType)) (ERecord fields) = do
-  tFields <- traverse (\(l, t, x) -> trace2 f (TT t) x >>= return . (l,))
-               (zipWith (\(l, t) (l', x) -> assert (l == l') $ (l, t, x))
-                 (rowToList rowType)
-                 (sortWith fst fields))
-  return $ ERecord tFields
-  where
-    rowToList' CRowNil = []
-    rowToList' (CRowCons l c r) = (l, c) : rowToList' r
-    rowToList' _ = error "not a row"
-    rowToList = sortWith fst . rowToList'
-trace2 f (TT (CList outputElementType)) (EFor (TT inputElementType) eIn eOut) = do
-  (tracetf, value) <- ask
-  tIn <- trace2 id (TT (CList inputElementType)) eIn
-  let fOut = fromScope eOut
-  let tOut = runReader (trace2 g (TT (CList outputElementType)) fOut) (tracetf, F value)
-  return $ EFor (TT (CApp tracetf inputElementType)) tIn $ toScope $ tOut
--- (toScope (runReader (trace2 g (TT (CList outputElementType)) (fromScope eOut)) (tracetf, F value)))
-  where
-    g :: Expr Constructor a (Var () x) -> Expr Constructor a (Var () x)
-    g x = EVariant "For" (ERecord [("in", EVar (B ())), ("out", _x)])
-
-  -- EFor (TT (CApp tracetf mElementC))
-       -- (EApp (fmap F (trace' tracetf value (TT (CList mElementC)) m)) (traceId tracetf)) $ toScope $
-  -- Right, so this fmap is where we keep the "same" variable that was
-  -- bound in the body before.
-    -- EApp (fmap (\v -> case v of F x -> F (F x); B () -> B ()) (trace' tracetf (F value) (TT (CList nElementC)) (fromScope n))) $
-         -- ETLam KType $ ELam (TT (toScope (CApp (F <$> tracetf) (CVar (B ()))))) $ toScope $
-            -- EApp (ETApp (EVar (F (F (B ())))) (toScope (CTrace (CVar (B ())))))
-                 -- (EVariant "For" (ERecord [("in", EVar (F (B ()))), ("out", EVar (B ()))]))
-
-
-
-ignoreOneVar :: (Expr c a x -> Expr c a x) -> Expr c a (Var () x) -> Expr c a (Var () x)
-ignoreOneVar f x = F <$> f ((\case F y -> y) <$> x)
-
--}
-
-runTrace2 :: Type Constructor String -> Expr Constructor String String -> Expr Constructor String String
-runTrace2 t e = runReader (trace2 (toScope (EVar (B ()))) t e) ((CVar "TRACE"), "value")
 
 putE :: Expr Constructor String String -> IO ()
 putE e = do
@@ -632,11 +460,9 @@ someFunc = do
   {-
   let notTrue = EIf ETrue EFalse ETrue
   putE notTrue
-  putE $ runTrace2 (TT CBool) notTrue
 
   let constantFor = efor "x" (TT CBool) (ESingletonList ETrue) (ESingletonList ETrue)
   putE constantFor
-  putE $ runTrace2 (TT (CList CBool)) constantFor
   let simpleFor = efor "m" (TT (CVar "am")) (EVar "M") (EVar "N") --(ESingeltonList (EVar "m"))
   putE simpleFor
 
@@ -644,17 +470,14 @@ someFunc = do
   -- putE $ betaReduceN 1 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
   -- putE $ betaReduceN 2 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
   -- putE $ betaReduceN 3 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
-  putE $ runTrace2 (TT (CList (CVar "an"))) simpleFor
   putE $ betaReduceN 6 $ EApp (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
 
   let forNestedBase = efor "a" (TT CBool) (ESingletonList ETrue) (efor "b" (TT CBool) (ESingletonList EFalse) (ESingletonList (EVar "y")))
   putE forNestedBase
-  putE $ runTrace2 (TT (CList CBool)) forNestedBase
 
   let forNested = efor "a" (TT CBool) (ESingletonList ETrue) (efor "b" (TT CBool) (ESingletonList EFalse) (ESingletonList (ERecord [("a", EVar "a"), ("b", EVar "b")])))
   putE forNested
   putE $ betaReduceN 11 $ EApp (trace (TT (CList (CRecord (CRowCons "a" CBool (CRowCons "b" CBool CRowNil))))) forNested) (traceId (CVar "TRACE"))
-  putE $ runTrace2 (TT (CList (CRecord (CRowCons "a" CBool (CRowCons "b" CBool CRowNil))))) forNested
 
   let forIf = efor "x" (TT CBool) (EConcat (EVar "xs") (EVar "ys")) (EIf (EVar "x") (ESingletonList (EVar "x")) EEmptyList)
   putE forIf
@@ -668,29 +491,24 @@ someFunc = do
   -- putE $ betaReduceN 7 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
   -- putE $ betaReduceN 8 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
   putE $ betaReduceN 9 $ EApp (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-  putE $ runTrace2 (TT (CList CBool)) forIf
   -}
 
   let record1 = ERecord [("b", ETrue), ("a", EFalse)]
   putE $ record1
   -- putE $ betaReduceN 0  $ EApp (trace (TT (CRecord (CRowCons "b" CBool (CRowCons "a" CBool CRowNil)))) record1) (traceId (CVar "TRACE"))
   putE $ betaReduceN 4 $ EApp (trace (TT (CRecord (CRowCons "b" CBool (CRowCons "a" CBool CRowNil)))) record1) (traceId (CVar "TRACE"))
-  putE $ runTrace2 (TT (CRecord (CRowCons "b" CBool (CRowCons "a" CBool CRowNil)))) record1
 
   let recRec = ERecord [("a", ERecord [("b", ETrue)])]
   putE recRec
   putE $ betaReduceN 5 $ EApp (trace (TT (CRecord (CRowCons "a" (CRecord (CRowCons "b" CBool CRowNil)) CRowNil))) recRec) (traceId (CVar "TRACE"))
-  putE $ runTrace2 (TT (CRecord (CRowCons "a" (CRecord (CRowCons "b" CBool CRowNil)) CRowNil))) recRec
 
   let proj1 = EProj "b" (TT (CRecord (CRowCons "b" CBool (CRowCons "a" CBool CRowNil)))) record1
   putE $ proj1
   putE $ betaReduceN 7 $ EApp (trace (TT CBool) proj1) (traceId (CVar "TRACE"))
-  putE $ runTrace2 (TT CBool) proj1
 
   let projRecRec = EProj "b" (TT (CRecord (CRowCons "b" CBool CRowNil))) (EProj "a" (TT (CRecord (CRowCons "a" (CRecord (CRowCons "b" CBool CRowNil)) CRowNil))) recRec)
   putE projRecRec
   putE $ betaReduceN 11 $ EApp (trace (TT CBool) projRecRec) (traceId (CVar "TRACE"))
-  putE $ runTrace2 (TT CBool) projRecRec
 
   let crab = CRecord (CRowCons "a" CString (CRowCons "b" CBool CRowNil))
 
