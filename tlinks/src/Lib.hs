@@ -140,6 +140,8 @@ tAbstract1 = go abstract1
        => (forall v. Eq v => v -> c v -> c' v)
       -> a -> Type c a -> Type c' a
     go _ _ TBool = TBool
+    go _ _ TInt = TInt
+    go _ _ TString = TString
     go f a (TT c) = TT (f a c)
     go f a (TForall k b) = TForall k (go f' a b)
       where
@@ -237,6 +239,7 @@ liftCE ETrue = ETrue
 liftCE EFalse = EFalse
 liftCE (EString s) = EString s
 liftCE (EVar x) = EVar x
+liftCE (EFix t b) = EFix (liftCT t) (hoistScope liftCE b)
 liftCE (ELam t b) = ELam (liftCT t) (hoistScope liftCE b)
 liftCE (EFor t e b) = EFor (liftCT t) (liftCE e) (hoistScope liftCE b)
 liftCE (EApp l r) = EApp (liftCE l) (liftCE r)
@@ -251,9 +254,12 @@ liftCE (ERecord l) = ERecord (mapSnd liftCE l)
 liftCE (EProj l t e) = EProj l (liftCT t) (liftCE e)
 liftCE (ETable n t) = ETable n (liftCT t)
 liftCE (EEq t l r) = EEq (liftCT t) (liftCE l) (liftCE r)
+liftCE (ETypecase c b i s l r t) = ETypecase (lift c) (liftCE b) (liftCE i) (liftCE s) (liftCE l) (liftCE r) (liftCE t)
 
 liftCT :: Monad c => Type c a -> Type (Scope () c) a
 liftCT TBool = TBool
+liftCT TInt = TInt
+liftCT TString = TString
 liftCT (TT c) = TT (lift c)
 liftCT (TForall k c) = TForall k (liftCT c)
 liftCT (TArrow a b) = TArrow (liftCT a) (liftCT b)
@@ -296,6 +302,7 @@ eAbstractC1 _ EFalse = EFalse
 eAbstractC1 _ (EString s) = EString s
 eAbstractC1 _ (EVar x) = EVar x
 eAbstractC1 a (ELam t b) = ELam (tAbstract1 a t) (hoistScope (eAbstractC1 a) b)
+eAbstractC1 a (EFix t b) = EFix (tAbstract1 a t) (hoistScope (eAbstractC1 a) b)
 eAbstractC1 a (EApp l r) = EApp (eAbstractC1 a l) (eAbstractC1 a r)
 eAbstractC1 a (ETLam k b) = ETLam k (eAbstractC1 a b)
 eAbstractC1 a (ETApp e c) = ETApp (eAbstractC1 a e) (abstract1 a c)
@@ -309,6 +316,7 @@ eAbstractC1 a (ERecord l) = ERecord (mapSnd (eAbstractC1 a) l)
 eAbstractC1 a (EProj l t r) = EProj l (tAbstract1 a t) (eAbstractC1 a r)
 eAbstractC1 a (ETable n t) = ETable n (tAbstract1 a t) -- not needed I think, should be base types..
 eAbstractC1 a (EEq t l r) = EEq (tAbstract1 a t) (eAbstractC1 a l) (eAbstractC1 a r)
+eAbstractC1 a (ETypecase c b i s l r t) = ETypecase (abstract1 a c) (eAbstractC1 a b) (eAbstractC1 a i) (eAbstractC1 a s) (eAbstractC1 a l) (eAbstractC1 a r) (eAbstractC1 a t)
 
 etlam :: Eq a => Monad c => a -> Kind -> Expr c a x -> Expr c a x
 etlam a k b = ETLam k (eAbstractC1 a b) -- this should be actual abstract, not my misnamed one, I think
@@ -418,6 +426,7 @@ betaReduce (EApp f x) = EApp (betaReduce f) (betaReduce x)
 betaReduce (ETApp (ETLam _k b) c) = eInstantiateC1 c b
 betaReduce (ETApp e c) = ETApp (betaReduce e) c
 betaReduce (EVar x) = EVar x
+-- betaReduce (EFix t b) = EFix t (hoistScope betaReduce b)
 betaReduce (ELam t b) = ELam t (hoistScope betaReduce b)
 betaReduce (ETLam k b) = ETLam k (betaReduce b)
 betaReduce (EVariant l e) = EVariant l (betaReduce e)
@@ -430,6 +439,7 @@ betaReduce (ERecord l) = ERecord (mapSnd betaReduce l)
 betaReduce (EProj l t e) = EProj l t (betaReduce e)
 betaReduce t@(ETable _ _) = t
 betaReduce (EEq t l r) = EEq t (betaReduce l) (betaReduce r)
+betaReduce (ETypecase c b i s l r t) = ETypecase c (betaReduce b) (betaReduce i) (betaReduce s) (betaReduce l) (betaReduce r) (betaReduce t)
 
 betaReduceN :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
 betaReduceN 0 e = e
