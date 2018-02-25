@@ -309,7 +309,7 @@ tracetf = CLam KType $ toScope $ CTyperec (CVar (B ()))
   (CTrace CBool) (CTrace CInt) (CTrace CString)
   (CLam KType (toScope (CLam KType (toScope (CList (CVar (B ())))))))
   (CLam KRow (toScope (CLam KRow (toScope (CRecord (CVar (B ())))))))
-  (CLam KType (toScope (CLam KType (toScope (CTrace (CVar (F (B ()))))))))
+  (CLam KType (toScope (CLam KType (toScope (CTrace (CVar (B ())))))))
 
 -- the VALUE type function
 valuetf :: Constructor a
@@ -317,7 +317,7 @@ valuetf = CLam KType $ toScope $ CTyperec (CVar (B ()))
   CBool CInt CString
   (CLam KType (toScope (CLam KType (toScope (CList (CVar (B ())))))))
   (CLam KRow (toScope (CLam KRow (toScope (CRecord (CVar (B ())))))))
-  (CLam KType (toScope (CLam KType (toScope (CVar (F (B ())))))))
+  (CLam KType (toScope (CLam KType (toScope (CVar (B ()))))))
 
 traceId :: Expr Constructor a x
 traceId = ETLam KType $ ELam (TT $ toScope (CApp (F <$> tracetf) (CVar (B ())))) $ toScope (EVar (B ()))
