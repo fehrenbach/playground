@@ -306,6 +306,14 @@ etlam a k b = ETLam k (eAbstractC1 a b) -- this should be actual abstract, not m
 -- the TRACE type function
 tracetf :: Constructor a
 tracetf = CLam KType $ toScope $ CTyperec (CVar (B ()))
+  (CTrace CBool) (CTrace CInt) (CTrace CString)
+  (CLam KType (toScope (CLam KType (toScope (CList (CVar (B ())))))))
+  (CLam KRow (toScope (CLam KRow (toScope (CRecord (CVar (B ())))))))
+  (CLam KType (toScope (CLam KType (toScope (CTrace (CVar (F (B ()))))))))
+
+-- the VALUE type function
+valuetf :: Constructor a
+valuetf = CLam KType $ toScope $ CTyperec (CVar (B ()))
   CBool CInt CString
   (CLam KType (toScope (CLam KType (toScope (CList (CVar (B ())))))))
   (CLam KRow (toScope (CLam KRow (toScope (CRecord (CVar (B ())))))))
@@ -472,7 +480,13 @@ putE e = do
 
 someFunc :: IO ()
 someFunc = do
+  putStrLn "TRACE:"
   putDoc $ prettyConstructor tvars False tracetf
+  putStrLn ""
+  putStrLn "VALUE:"
+  putDoc $ prettyConstructor tvars False valuetf
+  putStrLn ""
+  
   {-
   let notTrue = EIf ETrue EFalse ETrue
   putE notTrue
