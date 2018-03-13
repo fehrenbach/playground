@@ -183,6 +183,11 @@ tInstantiate1 = go instantiate1
     go f a (TList t) = TList (go f a t)
     go f a (TTrace t) = TTrace (go f a t)
 
+data Trace c a x
+  = TrLit (Expr c a x)
+  | TrFor (c a) (Expr c a x)
+  deriving (Functor)
+
 data Expr c a x
   = EUndefined
   | ETrue | EFalse
@@ -208,6 +213,7 @@ data Expr c a x
   | ETable String (Type c a) -- type of ELEMENTS/ROWS that is, a record type, not a list type
   | EEq (Type c a) (Expr c a x) (Expr c a x) -- equality specialized to a type
   | ETypecase (c a) (Expr c a x) (Expr c a x) (Expr c a x) (Expr (Scope () c) a x) (Expr (Scope () c) a x) (Expr (Scope () c) a x)
+  | ETrace (Trace c a x)
   | ETracecase (Expr c a x) -- discriminant
                (Scope () (Expr c a) x) -- Lit
                (Scope () (Expr c a) x) -- IfThen
@@ -248,6 +254,7 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   ETypecase c b i s l r t >>= f = ETypecase c (b >>= f) (i >>= f) (s >>= f) (l >>= liftCE . f) (r >>= liftCE . f) (t >>= liftCE . f)
   ETracecase x l t e g r q >>= f =
     ETracecase (x >>= f) (l >>>= f) (t >>>= f) (e >>>= f) (g >>>= liftCE . f) (r >>>= f) (q >>>= liftCE . f)
+  ETrace (TrFor c e) >>= f = ETrace (TrFor c (e >>= f))
 
 liftCE :: Monad c => Expr c a b -> Expr (Scope () c) a b
 liftCE EUndefined = EUndefined
@@ -430,7 +437,7 @@ isApp _ = False
 prettyExpr :: ([String], [String]) -> Bool -> Expr Constructor String String -> Doc
 prettyExpr ([], _) _ _ = error "ran out of variable names"
 prettyExpr (_, []) _ _ = error "ran out of type variable names"
-prettyExpr _ _ EUndefined = red (text "undefined")
+prettyExpr _ _ EUndefined = red (char '⊥')
 prettyExpr _ _ ETrue = text "true"
 prettyExpr _ _ EFalse = text "false"
 prettyExpr _ _ (EVar x) = text x
@@ -487,6 +494,7 @@ prettyExpr (v:vs, tv:tvs) p (ETracecase x l it ie f r oe) = pparens p $
     text "For" <+> text tv <+> text v <+> text "=>" <+> prettyExpr (vs, tvs) False (eInstantiateC1 (CVar tv) (instantiate1 (EVar v) f)) <$$>
     text "Row" <+> text v <+> text "=>" <+> prettyExpr (vs, tv:tvs) False (instantiate1 (EVar v) r) <$$>
     text "Op==" <+> text tv <+> text v <+> text "=>" <+> prettyExpr (vs, tvs) False (eInstantiateC1 (CVar tv) (instantiate1 (EVar v) oe)))
+prettyExpr ns p (ETrace (TrLit e)) = pparens p $ green (text "Lit") <+> prettyExpr ns True e
 
 betaReduce :: Eq a => Monad c => Expr c a x -> Expr c a x
 betaReduce EUndefined = EUndefined
@@ -549,9 +557,9 @@ trace' _ (EVariant _ _) = error "cannot trace variant constructor"
 trace' (TT constructor) expression = tr constructor expression
   where
     tr CBool ETrue = ELam (ttype tracetf) $ toScope $
-      EApp (ETApp (EVar (B ())) CBool) (EVariant "Lit" ETrue)
+      EApp (ETApp (EVar (B ())) CBool) (ETrace (TrLit ETrue)) -- (EVariant "Lit" ETrue)
     tr CBool EFalse = ELam (ttype tracetf) $ toScope $
-      EApp (ETApp (EVar (B ())) CBool) (EVariant "Lit" EFalse)
+      EApp (ETApp (EVar (B ())) CBool) (ETrace (TrLit EFalse)) -- (EVariant "Lit" EFalse)
     tr CString (EString s) = ELam (ttype tracetf) $ toScope $
       EApp (ETApp (EVar (B ())) CString) (EVariant "Lit" (EString s))
     tr c (EVar x) = ELam (ttype tracetf) $ toScope (EApp (ETApp (EVar (B ())) c) (EVar (F x)))
@@ -608,25 +616,6 @@ trace' _ _ = error "trace called with non-TT(c) type"
 trace :: Type Constructor String -> Expr Constructor String String -> Expr Constructor String String
 trace = trace' -- "value"
 
-srmap :: Expr Constructor a x -> Expr Constructor a x
-srmap (ERmap m (TT (CRecord row)) n) =
-  ERecord (map (\(l, fc) ->
-                  (l, EApp (ETApp m fc) (EProj l (TT (CRecord row)) n)))
-            (rowToList row))
-srmap e = e
-
-betaExpr :: (Monad c, Eq a) => Expr c a x -> Expr c a x
-betaExpr (EApp (ELam _t b) x) = instantiate1 x b
-betaExpr e = e
-
-betaExprT :: (Monad c, Eq a) => Expr c a x -> Expr c a x
-betaExprT (ETApp (ETLam _k b) c) = eInstantiateC1 c b
-betaExprT e = e
-
-betaCons :: Constructor a -> Constructor a
-betaCons (CApp (CLam _k b) x) = instantiate1 x b
-betaCons c = c
-
 unroll :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
 unroll 0 (EFix _ _) = EUndefined
 unroll n (EFix t b) = unroll (n-1) (instantiate1 (EFix t b) b)
@@ -659,46 +648,7 @@ unroll n (ETracecase x l it ie f r oe) = ETracecase
   (hoistScope (unroll n) f)
   (hoistScope (unroll n) r)
   (hoistScope (unroll n) oe)
-
-spec :: Eq a => Expr Constructor a x -> Expr Constructor a x
-spec (ERmap m (TT (CRecord row)) n) =
-  -- TODO probably needs to be fixed to handle row variables
-  ERecord (map (\(l, fc) ->
-                   (l, EApp (ETApp m fc) (EProj l (TT (CRecord row)) n)))
-            (rowToList row))
-spec (ERmap _ _ _) = error "Not a TT CRecord type in ERmap"
-spec (ETApp (ETLam _k m) c) = eInstantiateC1 c m
-spec (ETApp m c) = ETApp (spec m) c
-spec (ETypecase CBool b _ _ _ _ _) = b
-spec (ETypecase CInt _ i _ _ _ _) = i
-spec (ETypecase CString _ _ s _ _ _) = s
-spec (ETypecase (CList c) _ _ _ l _ _) = eInstantiateC1 c l
-spec (ETypecase (CRecord row) _ _ _ _ r _) = eInstantiateC1 row r
-spec (ETypecase (CTrace c) _ _ _ _ _ t) = eInstantiateC1 c t
-spec (ETypecase c b i s l r t) = ETypecase c b i s l r t -- eh
-spec EUndefined = EUndefined
-spec ETrue = ETrue
-spec EFalse = EFalse
-spec (EString s) = EString s
-spec (EVar x) = EVar x
-spec (EIf c t e) = EIf (spec c) (spec t) (spec e)
-spec (ELam t b) = ELam t (hoistScope spec b)
-spec (EFix t b) = EFix t (hoistScope spec b)
-spec (EApp m n) = EApp (spec m) (spec n)
-spec (ETLam k b) = ETLam k b -- TODO is that right?
-spec (EVariant l e) = EVariant l (spec e)
-spec EEmptyList = EEmptyList
-spec (ESingletonList e) = ESingletonList (spec e)
-spec (EConcat l r) = EConcat (spec l) (spec r)
-spec (EFor t i o) = EFor t (spec i) (hoistScope spec o)
-spec (ERecord l) = ERecord (mapSnd spec l)
-spec (EProj l t r) = EProj l t (spec r)
-spec (ETable n t) = ETable n t
-spec (EEq t l r) = EEq t (spec l) (spec r)
--- TODO for now
-spec (ETracecase x l it ie f r oe) = ETracecase (spec x) l it ie f r oe
-
-
+unroll n (ETrace (TrLit e)) = ETrace (TrLit (unroll n e))
 
 one :: Eq a => Expr Constructor a x -> Expr Constructor a x
 one EUndefined = EUndefined
@@ -728,7 +678,7 @@ one (EFor _ (ESingletonList e) o) = instantiate1 e o
 -- no, no, need proper elim frames
 one (EFor t i o) = EFor t (one i) (hoistScope one o)
 one (ERecord fs) = ERecord (mapSnd one fs)
-one (ERmap f t r) = error "TODO"
+one (ERmap f (TT (CRecord row)) r) = ERecord (map (\(l,t) -> (l, EApp (ETApp f t) (EProj l (TT (CRecord row)) r))) (rowToList row))
 one (EProj l t (ERecord fs)) = case lookup l fs of
   Nothing -> error "label not found in record"
   Just e -> e
@@ -741,8 +691,10 @@ one (ETypecase c b i s l r t) = case normC c of
   CRecord c' -> eInstantiateC1 c' r
   CTrace c' -> eInstantiateC1 c' t
 one (ETracecase x l it ie f r oe) = case x of
+  (ETrace (TrLit c)) -> instantiate1 c l
   EVariant "Lit" c -> instantiate1 c l
   -- EVariant "For" t -> _ f -- TODO
+one (ETrace (TrLit e)) = ETrace (TrLit (one e))
 
 normC :: Eq a => Constructor a -> Constructor a
 normC CBool = CBool
@@ -758,28 +710,6 @@ normC CRowNil = CRowNil
   -- | CRowCons Label (Constructor a) (Constructor a)
   -- | CTyperec (Constructor a) (Constructor a) (Constructor a) (Constructor a) (Constructor a) (Constructor a) (Constructor a)
 
-
-
--- everywhere ee tt cc = goE
---   where
---     goC CBool = cc CBool
-
---     goT (TT c) = tt (TT (goC c))
-
---     goE ETrue = ee ETrue
---     goE (ELam t e) = ee (ELam (goT t) (goE e))
-
--- onExpressions :: Eq a => Monad c =>
---   (Expr c a x -> Expr c a x) -> Expr c a x -> Expr c a x
--- onExpressions f = go
---   where
---     go ETrue = f ETrue
---     go EFalse = f EFalse
---     go (EString s) = f (EString s)
---     go (EApp m n) = f (EApp (go m) (go n))
---     go (EVar x) = f (EVar x)
---     go (EIf c t e) = f (EIf (go c) (go t) (go e))
---     go (ELam t e) = f (ELam t (_ e))
 
 putE :: Expr Constructor String String -> IO ()
 putE e = do
@@ -878,10 +808,6 @@ someFunc = do
 
   -- putE $ value
 
-  -- let simpleRmap = ERmap traceId (TT (CRecord (CRowCons "a" (CTrace CBool) (CRowCons "b" (CTrace CString) CRowNil)))) (ERecord [("a", EVariant "Lit" ETrue), ("b", EVariant "Lit" (EString "foo"))])
-  -- putE simpleRmap
-  -- putE (spec simpleRmap)
-
   -- putE selfJoin
   -- putE $ betaReduceN 17 $ EApp (trace (TT (CList (CRecord (CRowCons "x" crab (CRowCons "y" crab CRowNil))))) selfJoin) traceId
   -- let selfJoinValue = EApp (EApp (trace (TT (CList (CRecord (CRowCons "x" crab (CRowCons "y" crab CRowNil))))) selfJoin) traceId) value
@@ -899,7 +825,7 @@ someFunc = do
   putE $ unroll 2 bar
 
 
-  let valBool = EApp (ETApp value (CTrace CBool)) (EVariant "Lit" ETrue)
+  let valBool = EApp (ETApp value (CTrace CBool)) (ETrace (TrLit ETrue)) --(EVariant "Lit" ETrue)
   putE valBool
   putE (unroll 0 valBool)
   putE (unroll 1 valBool)
@@ -907,6 +833,14 @@ someFunc = do
   -- putE $ betaReduceN 1 $ spec $ spec $ unroll 1 valBool
   -- putE $ betaReduceN 2 $ spec $ spec $ unroll 1 valBool
   putE $ ((!! 4) . iterate one) $ unroll 1 valBool
+
+  let simpleRmap = ERmap traceId (TT (CRecord (CRowCons "a" (CTrace CBool) (CRowCons "b" (CTrace CString) CRowNil)))) (ERecord [("a", EVariant "Lit" ETrue), ("b", EVariant "Lit" (EString "foo"))])
+  putE simpleRmap
+  putE $ ((!! 0) . iterate one) $ simpleRmap
+  putE $ ((!! 1) . iterate one) $ simpleRmap
+  putE $ ((!! 2) . iterate one) $ simpleRmap
+  putE $ ((!! 3) . iterate one) $ simpleRmap
+  putE $ ((!! 4) . iterate one) $ simpleRmap
 
   -- let omega = EFix (TT CBool) (toScope (EApp (EVar (B ())) (EVar (B ()))))
   -- putE $ omega
