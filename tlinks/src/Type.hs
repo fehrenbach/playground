@@ -77,9 +77,9 @@ prettyType _ _ c | c == tracetf = text "TRACE"
 prettyType _ _ c | c == valuetf = text "TRACE"
 prettyType _ _ RowNil = error "row outside of record"
 prettyType _ _ (RowCons _ _ _) = error "row outside of record"
-prettyType _ _ Bool = text "Bool*"
-prettyType _ _ Int = text "Int*"
-prettyType _ _ String = text "String*"
+prettyType _ _ Bool = text "Bool"
+prettyType _ _ Int = text "Int"
+prettyType _ _ String = text "String"
 prettyType _ _ (Var a) = text a
 prettyType (av:avs) p (Lam k body) = pparens p $ hang 2 $ group $
   bold (char 'λ') <> text av <> kindAnnotation <> char '.' <> {- P.<$$> -} prettyType avs False (instantiate1 (Var av) body)
@@ -88,10 +88,10 @@ prettyType (av:avs) p (Lam k body) = pparens p $ hang 2 $ group $
           _ -> char ':' <> prettyKind k
 prettyType avs p (App a b) = pparens p $
   prettyType avs True a <+> prettyType avs True b
-prettyType avs p (List a) = pparens p $ text "List*" <+> prettyType avs True a
-prettyType avs p (Trace a) = pparens p $ text "Trace*" <+> prettyType avs True a
-prettyType _ p (Record (Var x)) = pparens p $ text "Record*" <+> text x
-prettyType avs p (Record row) = pparens p $ text "Record*" <+> parens (prettyRow avs row)
+prettyType avs p (List a) = pparens p $ text "List" <+> prettyType avs True a
+prettyType avs p (Trace a) = pparens p $ text "Trace" <+> prettyType avs True a
+prettyType _ p (Record (Var x)) = pparens p $ text "Record" <+> text x
+prettyType avs p (Record row) = pparens p $ text "Record" <+> parens (prettyRow avs row)
 prettyType avs p (Typerec x b i s l r t) = pparens p $ bold (text "Typerec") <+> prettyType avs True x </>
   tupled (map (prettyType avs False) [b, i, s, l, r, t])
 prettyType avs p (Arrow a b) = pparens p $ prettyType avs True a <+> text "->" <+> prettyType avs True b

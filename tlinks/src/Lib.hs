@@ -74,6 +74,7 @@ data Expr c a x
                (Scope () (Expr (Scope () c) a) x) -- For
                (Scope () (Expr c a) x) -- Row
                (Scope () (Expr (Scope () c) a) x) -- Eq
+  -- | Expr c a x ::: c a
   deriving (Functor)
 
 instance (Eq a, Monad c) => Applicative (Expr c a) where
@@ -105,6 +106,7 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   Tracecase x l t e g r q >>= f =
     Tracecase (x >>= f) (l >>>= f) (t >>>= f) (e >>>= f) (g >>>= liftCE . f) (r >>>= f) (q >>>= liftCE . f)
   Trace tc e >>= f = Trace tc (e >>= f)
+  -- e ::: t >>= f = (e >>= f) ::: t
 
 liftCE :: Monad c => Expr c a b -> Expr (Scope () c) a b
 liftCE Bottom = Bottom
@@ -189,6 +191,7 @@ eAbstractC1 t (Concat a b) = Concat (eAbstractC1 t a) (eAbstractC1 t b)
 eAbstractC1 a (For t i o) = For (abstract1 a t) (eAbstractC1 a i) (hoistScope (eAbstractC1 a) o)
 eAbstractC1 a (If c t e) = If (eAbstractC1 a c) (eAbstractC1 a t) (eAbstractC1 a e)
 eAbstractC1 a (Record l) = Record (mapSnd (eAbstractC1 a) l)
+eAbstractC1 a (Rmap f t r) = Rmap (eAbstractC1 a f) (abstract1 a t) (eAbstractC1 a r)
 eAbstractC1 a (Proj l t r) = Proj l (abstract1 a t) (eAbstractC1 a r)
 eAbstractC1 a (Table n t) = Table n (abstract1 a t) -- not needed I think, should be base types..
 eAbstractC1 a (Eq t l r) = Eq (abstract1 a t) (eAbstractC1 a l) (eAbstractC1 a r)
@@ -317,7 +320,7 @@ prettyExpr ns p (Trace TrLit e) = pparens p $ green (text "Lit") <+> prettyExpr 
 prettyExpr ns p (Trace TrRow e) = pparens p $ green (text "Row") <+> prettyExpr ns True e
 prettyExpr ns p (Trace TrIfThen e) = pparens p $ green (text "IfThen") <+> prettyExpr ns True e
 prettyExpr ns p (Trace TrIfElse e) = pparens p $ green (text "IfElse") <+> prettyExpr ns True e
-prettyExpr ns@(_, tvs) p (Trace (TrFor c) e) = pparens p $ green (text "For") <+> {- prettyType tvs True c <+> -} prettyExpr ns True e
+prettyExpr ns@(_, tvs) p (Trace (TrFor c) e) = pparens p $ green (text "For") <+> {- T.prettyType tvs True c <+> -} prettyExpr ns True e
 prettyExpr ns@(_, tvs) p (Trace (TrEq c) e) = pparens p $ green (text "Eq") <+> {- prettyType tvs True c <+> -} prettyExpr ns True e
 
 {-
@@ -497,25 +500,61 @@ trace k (If c t e) = If (value :§ T.Trace T.Bool :$ trace tid c)
 trace k (Empty t) = Empty t
 trace k (Singleton e) = Singleton (trace k e)
 trace k (Concat l r) = Concat (trace k l) (trace k r)
-trace k (For t i o) = For (T.App T.tracetf t) (trace tid i)
+trace k for@(For t i o) = For (T.App T.tracetf t) (trace tid i)
   (toScope (trace ((F <$> k) `nest` fScope) (fromScope o)))
   where
-    fScope = toScope (Trace (TrFor undefined) (Record [("in", Var (F (B ()))), ("out", Var (B ()))]))
+    -- fScope = toScope (Trace (TrFor undefined) (Record [("in", Var (F (B ()))), ("out", Var (B ()))]))
+    fScope = toScope (dist (toScope (Trace (TrFor (T.App T.tracetf t)) (Record [("in", Var (F (B ()))), ("out", Var (B ()))]))) :§ (T.App T.tracetf t) :$ (Var {- n -} (B ())))
 trace k (Record fs) = case typeof (Record fs) of
   T.Record row -> Record ((\(l,_t) -> case lookup l fs of
                                         Nothing -> error "field not present"
                                         Just f -> (l, trace k f)) <$> T.rowToList row)
   _ -> error "not a record type"
 trace k (Proj l _ r) = Proj l undefined (trace k r)
+trace k (Table n (T.Record row)) = For (T.Record row) (Table n (T.Record row))
+  (toScope (Singleton (Record (map (\(l,_) -> (l, fromScope $ k `nest` tblScope l)) (T.rowToList row)))))
+  where tblScope l = toScope $ Trace TrRow (Record [("table", Const (String n)),
+                                                    ("column", Const (String l)),
+                                                    ("data", Proj l undefined (Var (B ())))])
 trace _ Bottom = error "Can't trace Bottom"
+trace _ Lam{} = error "Can't trace Lam"
+trace _ TLam{} = error "Can't trace TLam"
+trace _ (Fix _ _) = error "Can't trace Fix"
+trace _ (_ :$ _) = error "Can't trace App"
+trace _ (_ :§ _) = error "Can't trace TApp"
+trace _ (Rmap _ _ _) = error "Can't trace RMap"
+trace _ Typecase{} = error "Can't trace Typecase"
+trace _ Tracecase{} = error "Can't trace Tracecase"
+trace _ Trace{} = error "Can't trace Trace"
 
-typeof :: Expr Type a x -> Type a
+-- dist :: Scope () (Expr Type a) x -> Scope () (Expr Type a) x
+dist :: Scope () (Expr Type a) x -> Expr Type a (Var b x)
+dist k = Fix (T.Forall T.KType (toScope (T.Arrow (T.App T.tracetf (T.Var (B ()))) (T.App T.tracetf (T.Var (B ())))))) $ toScope $
+  TLam T.KType (Typecase (toScope (T.Var (B ())))
+                Bottom Bottom Bottom
+                (Lam (toScope (toScope (T.List (T.Var (B ())))))
+                  (toScope (For (toScope (toScope (T.Var (B ())))) (Var (B ()))
+                             (toScope (Singleton (Var (F (F (B ()))) :§ toScope (toScope (T.Var (B ()))) :$ Var (B ())))))))
+                (Lam (toScope (toScope (T.Record (T.Var (B ())))))
+                  (toScope (Rmap (Var (F (B ()))) (toScope (toScope (T.Record (T.Var (B ()))))) (Var (B ())))))
+                (Lam (toScope (toScope (T.Trace (T.Var (B ())))))
+                  (hoistScope (liftCE . liftCE) (F . F <$> k))))
+
+typeof :: Show x => Eq a => Expr Type a x -> Type a
+typeof Bottom = error "bottom"
+typeof (Var x) = error $ "unannotated var " ++ show x
 typeof (Const (Bool _)) = T.Bool
 typeof (Const (Int _)) = T.Int
 typeof (Const (String _)) = T.String
+-- typeof (_ ::: t) = t
 typeof (Record fs) = T.Record (rowType fs)
   where rowType [] = T.RowNil
         rowType ((l,e):es) = T.RowCons l (typeof e) (rowType es)
+typeof (Singleton e) = T.List (typeof e)
+typeof (Proj l _ e) = case typeof e of
+  T.Record row -> case lookup l (T.rowToList row) of
+    Just t -> t
+-- typeof (For t i o) = typeof (instantiate1 (Bottom ::: t) o)
 
 -- Takes two expressions which each have one hole in them, and plugs
 -- the hole in the first expression with the second expression,
@@ -541,7 +580,7 @@ showTraced e = do
   putStrLn "===================="
   putE e
   putStrLn "-------trace---->"
-  putE $ {- (!! 20) . iterate one $ unroll 2 $ -} trace' e
+  putE $ (!! 20) . iterate one $ unroll 2 $ trace' e
 
 true, false :: Expr c a x
 true = Const (Bool True)
@@ -573,87 +612,16 @@ someFunc = do
 
   showTraced $ for "x" (T.Record (T.RowCons "b" T.Bool T.RowNil)) (Singleton (Record [("b", true)])) (Singleton (Var "x"))
   showTraced $ for "x" (T.Record (T.RowCons "b" T.Bool T.RowNil)) (Singleton (Record [("b", true)])) (Singleton (Proj "b" undefined (Var "x")))
+  putStrLn "This used to be broken. It's not actually in normal form though. However, with tables we can have expressions like this, so it's good to have it working anyways."
 
-  putStrLn "Okay, so the more compact traces have the same problem. That's good to know. I think I can fix it by applying a distribution function to subtraces"
+  let crab = T.Record (T.RowCons "a" T.String (T.RowCons "b" T.Bool T.RowNil))
+  let tableABs = Table "abs" crab
+  showTraced $ tableABs
 
-  -- putStrLn "TRACE:"
-  -- putDoc $ prettyType tvars False tracetf
-  -- putStrLn ""
-  -- putStrLn "VALUE:"
-  -- putDoc $ prettyType tvars False valuetf
-  -- putStrLn ""
-
-  -- let notTrue = EIf ETrue EFalse ETrue
-  -- putE notTrue
-
-  -- let constantFor = efor "x" (TT CBool) (ESingletonList ETrue) (ESingletonList ETrue)
-  -- putE constantFor
-  -- let simpleFor = efor "m" (TT (CVar "am")) (EVar "M") (EVar "N") --(ESingeltonList (EVar "m"))
-  -- putE simpleFor
-
-  -- putE $ betaReduceN 0 $ E(:$) (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 1 $ E(:$) (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 2 $ E(:$) (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 3 $ E(:$) (trace (TT (CList (CVar "an"))) simpleFor) (traceId (CVar "TRACE"))
-  -- putE $ (!! 8) . iterate one $ E(:$) (trace (TT (CList (CVar "an"))) simpleFor) traceId
-
-  -- let forNestedBase = efor "a" (TT CBool) (ESingletonList ETrue) (efor "b" (TT CBool) (ESingletonList EFalse) (ESingletonList (EVar "y")))
-  -- putE forNestedBase
-
-  -- let forNested = efor "a" (TT CBool) (ESingletonList ETrue) (efor "b" (TT CBool) (ESingletonList EFalse) (ESingletonList (ERecord [("a", EVar "a"), ("b", EVar "b")])))
-  -- putE forNested
-  -- putE $ (!! 20) . iterate one $ E(:$) (trace (TT (CList (CRecord (CRowCons "a" CBool (CRowCons "b" CBool CRowNil))))) forNested) traceId
-
-{-
-  let forIf = efor "x" (TT CBool) (EConcat (EVar "xs") (EVar "ys")) (EIf (EVar "x") (ESingletonList (EVar "x")) EEmptyList)
-  putE forIf
-  -- putE $ betaReduceN 0 $ E(:$) (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 1 $ E(:$) (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 2 $ E(:$) (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 3 $ E(:$) (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 4 $ E(:$) (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 5 $ E(:$) (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 6 $ E(:$) (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 7 $ E(:$) (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 8 $ E(:$) (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-  putE $ betaReduceN 9 $ E(:$) (trace (TT (CList CBool)) forIf) (traceId (CVar "TRACE"))
-
-  let record1 = ERecord [("b", ETrue), ("a", EFalse)]
-  putE $ record1
-  -- putE $ betaReduceN 0  $ E(:$) (trace (TT (CRecord (CRowCons "b" CBool (CRowCons "a" CBool CRowNil)))) record1) (traceId (CVar "TRACE"))
-  putE $ betaReduceN 4 $ E(:$) (trace (TT (CRecord (CRowCons "b" CBool (CRowCons "a" CBool CRowNil)))) record1) traceId
-
-  let recRec = ERecord [("a", ERecord [("b", ETrue)])]
-  putE recRec
-  putE $ betaReduceN 5 $ E(:$) (trace (TT (CRecord (CRowCons "a" (CRecord (CRowCons "b" CBool CRowNil)) CRowNil))) recRec) traceId
-
-  let proj1 = EProj "b" (TT (CRecord (CRowCons "b" CBool (CRowCons "a" CBool CRowNil)))) record1
-  putE $ proj1
-  putE $ betaReduceN 7 $ E(:$) (trace (TT CBool) proj1) traceId
-
-  let projRecRec = EProj "b" (TT (CRecord (CRowCons "b" CBool CRowNil))) (EProj "a" (TT (CRecord (CRowCons "a" (CRecord (CRowCons "b" CBool CRowNil)) CRowNil))) recRec)
-  putE projRecRec
-  putE $ betaReduceN 11 $ E(:$) (trace (TT CBool) projRecRec) traceId
-  -}
-  -- putE $ value
-
-  -- let crab = T.Record (T.RowCons "a" T.String (T.RowCons "b" T.Bool T.RowNil))
-
-  -- let tableABs = Table "abs" crab
-  -- let tTableABs = E(:$) (trace (TT (CList crab)) tableABs) traceId
-  -- putE tableABs
-  -- putE $ tTableABs
-  -- putStrLn "traced:"
-  -- putE $ (!! 3) . iterate one $ tTableABs
-
-  -- putStrLn "----------------------------------------------------------------------"
-
-  -- let asFromTable = efor "x" (TT crab) tableABs (ESingletonList (EProj "a" (TT crab) (EVar "x")))
-  -- let unTAsFromTable = EApp (E(:§) value (CList (CTrace CString)))
-  --                         (EApp (trace (TT (CList CString)) asFromTable) traceId)
-  -- putE asFromTable
-  -- putStrLn "~>"
-  -- putE $ ((!! 22) . iterate one) $ unroll 2 $ unTAsFromTable
+  let xFromTable = for "x" crab tableABs (Singleton (Var "x"))
+  showTraced $ xFromTable
+  let asFromTable = for "x" crab tableABs (Singleton (Proj "a" undefined (Var "x")))
+  showTraced $ asFromTable
 
   -- let forIfProj = efor "x" (TT crab) tableABs (ESingletonList (EIf (EProj "b" (TT crab) (EVar "x")) (EProj "a" (TT crab) (EVar "x")) (EString "fake")))
   -- putE $ forIfProj
@@ -698,13 +666,10 @@ someFunc = do
   --                       (ESingletonList (ERecord [("x", EVar "x"), ("y", EVar "y")]))
   --                       EEmptyList))
 
-  putE $ Empty T.Bool
-  putE $ Singleton (Const (Bool True))
-  putE $ Concat (Empty T.Bool) (Singleton (Const (Bool True)))
-  putE $ one $ Concat (Empty T.Bool) (Singleton (Const (Bool True)))
-
-
-  putStrLn "end"
+  -- putE $ Empty T.Bool
+  -- putE $ Singleton (Const (Bool True))
+  -- putE $ Concat (Empty T.Bool) (Singleton (Const (Bool True)))
+  -- putE $ one $ Concat (Empty T.Bool) (Singleton (Const (Bool True)))
 
   -- putE selfJoin
   -- putE $ betaReduceN 17 $ EApp (trace (TT (CList (CRecord (CRowCons "x" crab (CRowCons "y" crab CRowNil))))) selfJoin) traceId
