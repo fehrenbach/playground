@@ -1,28 +1,43 @@
-{-# LANGUAGE InstanceSigs, FlexibleContexts, DeriveFunctor, StandaloneDeriving, TemplateHaskell, RankNTypes, ScopedTypeVariables, TupleSections, LambdaCase #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 
-module Lib
-    ( someFunc
-    ) where
+module Lib where
 
 import Bound ((>>>=), Var(B,F))
 import Bound.Scope.Simple
+-- import Bound.Scope
 import Common
 import Control.Exception (assert)
 import Control.Monad (ap)
 import Control.Monad.Morph (lift, hoist)
-import Data.Functor.Classes (Eq1)
-import Data.Deriving (deriveShow1, deriveEq1)
-import Text.PrettyPrint.ANSI.Leijen hiding (string, nest, (<$>))
+import Data.List (all)
+import Data.Bifunctor (Bifunctor, first, second)
+import Data.Functor.Classes (Eq1, liftEq)
+import Data.Deriving (deriveShow1, deriveEq1, makeLiftEq)
+import qualified Debug.Trace as Debug
+import Text.PrettyPrint.ANSI.Leijen hiding (string, nest, (<$>), int)
 import qualified Text.PrettyPrint.ANSI.Leijen as P
-
+import GHC.Stack (HasCallStack)
 import Type (Type, Kind)
 import qualified Type as T
+import qualified Hedgehog as H
+import           Hedgehog hiding (Var, assert)
+import qualified Hedgehog.Gen as Gen
+import qualified Hedgehog.Range as Range
 
--- I'm sure there's a better way to do this, but my hoogle-fu is insufficient
-mapSnd :: (a -> b) -> [(l, a)] -> [(l, b)]
-mapSnd _ [] = []
-mapSnd f ((a,b):r) = (a, f b) : mapSnd f r
+mapSnd :: (Bifunctor p, Functor f) =>
+  (b -> c) -> f (p a b) -> f (p a c)
+mapSnd f = fmap (second f)
 
 tvars, evars :: [String]
 tvars = ["α", "β", "γ"] <> [ "α" <> show x | x <- [0 :: Integer ..] ]
@@ -35,7 +50,7 @@ data Trace c
   | TrFor c
   | TrRow
   | TrEq c
-  deriving (Functor)
+  deriving (Eq, Functor)
 
 data Const
   = Bool Bool
@@ -62,7 +77,7 @@ data Expr c a x
   -- The Type is the type of the record
   | Rmap (Expr c a x) (c a) (Expr c a x)
   -- the Type is the type of the record. I need this for tracing.
-  | Proj Label (c a) (Expr c a x)
+  | Proj Label (Expr c a x)
   | Table String (c a) -- type of ELEMENTS/ROWS that is, a record type, not a list type
   | Eq (c a) (Expr c a x) (Expr c a x) -- equality specialized to a type
   | Typecase (c a) (Expr c a x) (Expr c a x) (Expr c a x) (Expr (Scope () c) a x) (Expr (Scope () c) a x) (Expr (Scope () c) a x)
@@ -74,8 +89,11 @@ data Expr c a x
                (Scope () (Expr (Scope () c) a) x) -- For
                (Scope () (Expr c a) x) -- Row
                (Scope () (Expr (Scope () c) a) x) -- Eq
-  -- | Expr c a x ::: c a
+  | Expr c a x ::: c a
   deriving (Functor)
+
+-- deriveEq1 ''Expr
+-- a = $(makeLiftEq ''Expr)
 
 instance (Eq a, Monad c) => Applicative (Expr c a) where
   pure = return
@@ -99,19 +117,20 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   Record le >>= f = Record (map (\(l, x) -> (l, x >>= f)) le)
   Rmap a t b >>= f = Rmap (a >>= f) t (b >>= f)
   If i t e >>= f = If (i >>= f) (t >>= f) (e >>= f)
-  Proj l t e >>= f = Proj l t (e >>= f)
+  Proj l e >>= f = Proj l (e >>= f)
   Table n t >>= _ = Table n t
   Eq t l r >>= f = Eq t (l >>= f) (r >>= f)
   Typecase c b i s l r t >>= f = Typecase c (b >>= f) (i >>= f) (s >>= f) (l >>= liftCE . f) (r >>= liftCE . f) (t >>= liftCE . f)
   Tracecase x l t e g r q >>= f =
     Tracecase (x >>= f) (l >>>= f) (t >>>= f) (e >>>= f) (g >>>= liftCE . f) (r >>>= f) (q >>>= liftCE . f)
   Trace tc e >>= f = Trace tc (e >>= f)
-  -- e ::: t >>= f = (e >>= f) ::: t
+  e ::: t >>= f = (e >>= f) ::: t
 
 liftCE :: Monad c => Expr c a b -> Expr (Scope () c) a b
 liftCE Bottom = Bottom
 liftCE (Const c) = (Const c)
 liftCE (Var x) = Var x
+liftCE (e ::: t) = liftCE e ::: lift t
 liftCE (Fix t b) = Fix (lift t) (hoistScope liftCE b)
 liftCE (Lam t b) = Lam (lift t) (hoistScope liftCE b)
 liftCE (For t e b) = For (lift t) (liftCE e) (hoistScope liftCE b)
@@ -124,7 +143,7 @@ liftCE (Concat a b) = Concat (liftCE a) (liftCE b)
 liftCE (If i t e) = If (liftCE i) (liftCE t) (liftCE e)
 liftCE (Record l) = Record (mapSnd liftCE l)
 liftCE (Rmap a t b) = Rmap (liftCE a) (lift t) (liftCE b)
-liftCE (Proj l t e) = Proj l (lift t) (liftCE e)
+liftCE (Proj l e) = Proj l (liftCE e)
 liftCE (Table n t) = Table n (lift t)
 liftCE (Eq t l r) = Eq (lift t) (liftCE l) (liftCE r)
 liftCE (Typecase c b i s l r t) = Typecase (lift c) (liftCE b) (liftCE i) (liftCE s) (liftCE l) (liftCE r) (liftCE t)
@@ -149,6 +168,7 @@ eInstantiateC1 :: Eq a => Monad c => c a -> Expr (Scope () c) a x -> Expr c a x
 eInstantiateC1 _ Bottom = Bottom
 eInstantiateC1 _ (Const c) = Const c
 eInstantiateC1 _ (Var x) = Var x
+eInstantiateC1 a (e ::: t) = (eInstantiateC1 a e) ::: instantiate1 a t
 eInstantiateC1 a (Lam t b) = Lam (instantiate1 a t) (hoistScope (eInstantiateC1 a) b)
 eInstantiateC1 a (Fix t b) = Fix (instantiate1 a t) (hoistScope (eInstantiateC1 a) b)
 eInstantiateC1 a ((:$) l r) = (:$) (eInstantiateC1 a l) (eInstantiateC1 a r)
@@ -161,7 +181,7 @@ eInstantiateC1 a (For t i o) = For (instantiate1 a t) (eInstantiateC1 a i) (hois
 eInstantiateC1 a (If c t e) = If (eInstantiateC1 a c) (eInstantiateC1 a t) (eInstantiateC1 a e)
 eInstantiateC1 a (Record l) = Record (mapSnd (eInstantiateC1 a) l)
 eInstantiateC1 a (Rmap x t y) = Rmap (eInstantiateC1 a x) (instantiate1 a t) (eInstantiateC1 a y)
-eInstantiateC1 a (Proj l t e) = Proj l (instantiate1 a t) (eInstantiateC1 a e)
+eInstantiateC1 a (Proj l e) = Proj l (eInstantiateC1 a e)
 eInstantiateC1 a (Table n t) = Table n (instantiate1 a t)
 eInstantiateC1 a (Eq t l r) = Eq (instantiate1 a t) (eInstantiateC1 a l) (eInstantiateC1 a r)
 eInstantiateC1 a (Typecase c b i s l r t) = Typecase (instantiate1 a c) (eInstantiateC1 a b) (eInstantiateC1 a i) (eInstantiateC1 a s) (eInstantiateC1 (lift a) l) (eInstantiateC1 (lift a) r) (eInstantiateC1 (lift a) t)
@@ -192,10 +212,12 @@ eAbstractC1 a (For t i o) = For (abstract1 a t) (eAbstractC1 a i) (hoistScope (e
 eAbstractC1 a (If c t e) = If (eAbstractC1 a c) (eAbstractC1 a t) (eAbstractC1 a e)
 eAbstractC1 a (Record l) = Record (mapSnd (eAbstractC1 a) l)
 eAbstractC1 a (Rmap f t r) = Rmap (eAbstractC1 a f) (abstract1 a t) (eAbstractC1 a r)
-eAbstractC1 a (Proj l t r) = Proj l (abstract1 a t) (eAbstractC1 a r)
+eAbstractC1 a (Proj l r) = Proj l (eAbstractC1 a r)
 eAbstractC1 a (Table n t) = Table n (abstract1 a t) -- not needed I think, should be base types..
 eAbstractC1 a (Eq t l r) = Eq (abstract1 a t) (eAbstractC1 a l) (eAbstractC1 a r)
 eAbstractC1 a (Typecase c b i s l r t) = Typecase (abstract1 a c) (eAbstractC1 a b) (eAbstractC1 a i) (eAbstractC1 a s) (eAbstractC1 a l) (eAbstractC1 a r) (eAbstractC1 a t)
+eAbstractC1 a (Trace tr e) = Trace (fmap (abstract1 a) tr) (eAbstractC1 a e)
+
 
 tlam :: Eq a => Monad c => a -> Kind -> Expr c a x -> Expr c a x
 tlam a k b = TLam k (eAbstractC1 a b) -- this should be actual abstract, not my misnamed one, I think
@@ -226,26 +248,22 @@ value = Fix (T.Forall T.KType (toScope (T.Arrow
                    (toScope (Var (B ())))
                    -- IfThen
                    (toScope ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (T.Trace (T.Var (B ()))))))
-                              (Proj "then" (toScope (toScope (T.Record (T.RowCons "then" (T.Trace (T.Var (B ()))) (T.RowCons "cond" (T.Trace T.Bool) T.RowNil))))) (Var (B ())))))
+                              (Proj "then" (Var (B ())))))
                    -- IfElse
                    (toScope ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (T.Trace (T.Var (B ()))))))
-                              (Proj "else" (toScope (toScope (T.Record (T.RowCons "else" (T.Trace (T.Var (B ()))) (T.RowCons "cond" (T.Trace T.Bool) T.RowNil))))) (Var (B ())))))
+                              (Proj "else" (Var (B ())))))
                    -- For
                    (toScope ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.Trace (T.Var (F (B ()))))))))
-                             (Proj "out" (toScope (toScope (toScope (T.Record T.RowNil {- TODO -}))))
-                              (Var (B ())))))
+                             (Proj "out" (Var (B ())))))
                    -- Row
-                   (toScope (Proj "data" (toScope (toScope (T.Record (T.RowCons "data" (T.Var (B ())) {- TODO other fields -} T.RowNil))))
-                             (Var (B ()))))
+                   (toScope (Proj "data" (Var (B ()))))
                    -- OpEq
                    (toScope (Eq (toScope (toScope (toScope (T.Var (B ())))))
                              ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.Trace (T.Var (B ())))))))
-                               (Proj "left" eqRType (Var (B ()))))
+                               (Proj "left" (Var (B ()))))
                              ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.Trace (T.Var (B ())))))))
-                               (Proj "right" eqRType (Var (B ()))))))
+                               (Proj "right" (Var (B ()))))))
                    )))
-        where
-          eqRType = toScope (toScope (toScope (T.Record (T.RowCons "left" (T.Trace (T.Var (B ()))) (T.RowCons "right" (T.Trace (T.Var (B ()))) T.RowNil)))))
 
 traceId :: Expr Type a x
 traceId = TLam T.KType $ Lam (toScope (T.App (F <$> T.tracetf) (T.Var (B ())))) $ toScope (Var (B ()))
@@ -261,10 +279,11 @@ prettyExpr (_, []) _ _ = error "ran out of type variable names"
 prettyExpr _ _ Bottom = red (char '⊥')
 prettyExpr _ _ (Const (Bool b)) = text (show b)
 prettyExpr _ _ (Const (Int b)) = text (show b)
-prettyExpr _ _ (Const (String b)) = text (show b)
+prettyExpr _ _ (Const (String b)) = dquotes $ text b
 prettyExpr _ _ (Var x) = text x
+prettyExpr (vs, tvs) p (e ::: t) = pparens p $ prettyExpr (vs, tvs) True e <+> char ':' <+> T.prettyType tvs True t
 prettyExpr (v:vs, tvs) p (Fix t e) = pparens p $ hang 2 $ group $
-  bold (text "fix") <+> parens (text v <> colon <> T.prettyType tvs False t) <> dot P.<$$> prettyExpr (vs, tvs) False (instantiate1 (Var v) e)
+  bold (text "fix") <+> (text v <> colon <> T.prettyType tvs False t) <> dot P.<$$> prettyExpr (vs, tvs) False (instantiate1 (Var v) e)
 prettyExpr (v:vs, tvs) p (Lam t b) = pparens p $ hang 2 $ group $
   bold (char 'λ') <> text v <> typeAnnotation <> char '.' P.<$$> prettyExpr (vs, tvs) False (instantiate1 (Var v) b)
   where typeAnnotation = char ':' <> T.prettyType tvs False t
@@ -292,7 +311,7 @@ prettyExpr ns p (If c t e) = pparens p $ group $ align $
   bold (text "if") <+> prettyExpr ns True c P.<$>
   bold (text "then") <+> prettyExpr ns True t P.<$>
   bold (text "else") <+> prettyExpr ns True e
-prettyExpr ns p (Proj l _t e) = pparens p $
+prettyExpr ns _ (Proj l e) = --pparens p $
   prettyExpr ns True e <> char '.' <> blue (text l)
 prettyExpr (_, tvs) p (Table n t) = pparens p $
   bold (text "table") <+> text (show n) <+> T.prettyType tvs True t
@@ -323,48 +342,8 @@ prettyExpr ns p (Trace TrIfElse e) = pparens p $ green (text "IfElse") <+> prett
 prettyExpr ns@(_, tvs) p (Trace (TrFor c) e) = pparens p $ green (text "For") <+> {- T.prettyType tvs True c <+> -} prettyExpr ns True e
 prettyExpr ns@(_, tvs) p (Trace (TrEq c) e) = pparens p $ green (text "Eq") <+> {- prettyType tvs True c <+> -} prettyExpr ns True e
 
-{-
-betaReduce :: Eq a => Monad c => Expr c a x -> Expr c a x
-betaReduce Bottom = Bottom
-betaReduce ETrue = ETrue
-betaReduce EFalse = EFalse
-betaReduce (EString s) = EString s
--- TODO might want to check types before reducing
-betaReduce (EApp (ELam _t b) x) = instantiate1 x b
-betaReduce (EApp f x) = EApp (betaReduce f) (betaReduce x)
--- TODO might want to check kinds before reducing
-betaReduce (E(:§) (ETLam _k b) c) = eInstantiateC1 c b
-betaReduce (E(:§) e c) = E(:§) (betaReduce e) c
-betaReduce (EVar x) = EVar x
-betaReduce (ELam t b) = ELam t (hoistScope betaReduce b)
-betaReduce (ETLam k b) = ETLam k (betaReduce b)
--- betaReduce (EVariant l e) = EVariant l (betaReduce e)
-betaReduce (ESingletonList e) = ESingletonList (betaReduce e)
-betaReduce EEmptyList = EEmptyList
-betaReduce (EConcat l r) = EConcat (betaReduce l) (betaReduce r)
-betaReduce (EFor t i o) = EFor t (betaReduce i) (hoistScope betaReduce o)
-betaReduce (EIf c t e) = EIf (betaReduce c) (betaReduce t) (betaReduce e)
-betaReduce (ERecord l) = ERecord (mapSnd betaReduce l)
-betaReduce (EProj l t e) = EProj l t (betaReduce e)
-betaReduce t@(ETable _ _) = t
-betaReduce (EEq t l r) = EEq t (betaReduce l) (betaReduce r)
-betaReduce (ETypecase c b i s l r t) = ETypecase c (betaReduce b) (betaReduce i) (betaReduce s) (betaReduce l) (betaReduce r) (betaReduce t)
-betaReduce (EFix t e) = EFix t (hoistScope betaReduce e)
-betaReduce (ERmap m t n) = ERmap (betaReduce m) t (betaReduce n)
-betaReduce (ETracecase x l it ie f r oe) = ETracecase
-  (betaReduce x)
-  (hoistScope betaReduce l)
-  (hoistScope betaReduce it)
-  (hoistScope betaReduce ie)
-  (hoistScope betaReduce f)
-  (hoistScope betaReduce r)
-  (hoistScope betaReduce oe)
-
-betaReduceN :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
-betaReduceN 0 e = e
-betaReduceN n e = betaReduceN (n-1) (betaReduce e)
--}
-
+instance Show (Expr Type String String) where
+  showsPrec _ e = displayS (renderPretty 0.6 90 (prettyExpr (evars, tvars) False e))
 
 unroll :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
 unroll 0 (Fix _ _) = Bottom
@@ -382,7 +361,7 @@ unroll n (Singleton e) = Singleton (unroll n e)
 unroll n (Concat a b) = Concat (unroll n a) (unroll n b)
 unroll n (For t i o) = For t (unroll n i) (hoistScope (unroll n) o)
 unroll n (Record l) = Record (mapSnd (unroll n) l)
-unroll n (Proj l t e) = Proj l t (unroll n e)
+unroll n (Proj l e) = Proj l (unroll n e)
 unroll _ (Table name t) = Table name t
 unroll n (Rmap a t b) = Rmap (unroll n a) t (unroll n b)
 unroll n (Eq t l r) = Eq t (unroll n l) (unroll n r)
@@ -396,9 +375,9 @@ unroll n (Tracecase x l it ie f r oe) = Tracecase
   (hoistScope (unroll n) r)
   (hoistScope (unroll n) oe)
 unroll n (Trace tr e) = Trace tr (unroll n e)
+unroll n (e ::: t) = (unroll n e) ::: t
 
-
-one :: Show a => Eq a => Expr Type a x -> Expr Type a x
+one :: Show x => Show a => Eq a => Expr Type a x -> Expr Type a x
 one Bottom = Bottom
 one (Const c) = Const c
 one (Var v) = Var v
@@ -420,7 +399,9 @@ one (Singleton e) = Singleton (one e)
 one (Concat (Empty _) r) = r
 one (Concat l (Empty _)) = l
 one (Concat l r) = Concat (one l) (one r)
-one (For _ (Empty _) _) = Empty (error "Type of the body?...")
+one f@(For _ (Empty _) _) = Empty (elementType (typeof f))
+  where elementType (T.List et) = et
+        elementType _ = error "not a list type"
 one (For _ (Singleton e) o) = instantiate1 e o
 -- for (x <- for (y <- L) M) N ~> for (y <- L) (for (x <- M) N)
 -- This circumvents the safety implied by the Scope scope safety, but
@@ -446,13 +427,13 @@ one (For t (Table n tt) o) = For t (Table n tt) (hoistScope one o)
 one (For t i o) = For t (one i) o --(hoistScope one o)
 one (Record fs) = Record (mapSnd one fs)
 one (Rmap f (T.Record row) r) = Record
-  (map (\(l,t) -> (l, (:$) ((:§) f t) (Proj l (T.Record row) r)))
+  (map (\(l,t) -> (l, f :§ t :$ Proj l r))
     (T.rowToList row))
 one (Rmap _ _ _) = error "TODO need to normalize type (and switch to constructor, not type to begin with, I think"
-one (Proj l _ (Record fs)) = case lookup l fs of
+one (Proj l (Record fs)) = case lookup l fs of
   Nothing -> error "label not found in record"
   Just e -> e
-one (Proj l t e) = Proj l t (one e)
+one (Proj l e) = Proj l (one e)
 -- one (EEq _ l r) | l == r = ETrue --
 one (Eq t l r) = Eq t (one l) (one r)
 one (Typecase c b i s l r t) = case c of
@@ -468,28 +449,14 @@ one (Tracecase x l it ie f r oe) = case x of
                                    TrEq c -> hoistScope (eInstantiateC1 c) oe)
   x' -> Tracecase (one x') l it ie f r oe
 one (Trace tr e) = Trace tr (one e)
+one (e ::: t) = one e ::: t
 
-{-
-wtf :: Expr c a x -> String
-wtf EVar{} = "EVar"
-wtf Bottom{} = "Bottom"
-wtf ETrue = "ETrue"
-wtf EFalse = "EFalse"
-wtf (EString s) = "EString " ++ s
-wtf EIf{} = "EIf"
-wtf ELam{} = "ELam"
-wtf EFix{} = "EFix"
-wtf (E(:$) a b) = "E(:$) (" ++ wtf a ++ ") (" ++ wtf b ++ ")"
-            -- (ETLam _ _)
-            -- (E(:§) _ _)
-            -- (EVariant _ _)
-            -- EEmptyList
--}
-tid :: Scope () (Expr c a) x
+tid :: Eq a => Monad c => Scope () (Expr c a) x
 tid = toScope (Var (B ()))
 
 trace :: Show x => Eq a => Scope () (Expr Type a) x -> Expr Type a x -> Expr Type a x
 trace k (Var v) = instantiate1 (Var v) k
+-- trace k (Var v) = Const (String $ "(\\y.dist (k y)) t " ++ (show v))
 trace k (Const c) = instantiate1 (Trace TrLit (Const c)) k
 trace k (If c t e) = If (value :§ T.Trace T.Bool :$ trace tid c)
   (trace (k `nest` itScope) t)
@@ -501,21 +468,27 @@ trace k (Empty t) = Empty t
 trace k (Singleton e) = Singleton (trace k e)
 trace k (Concat l r) = Concat (trace k l) (trace k r)
 trace k for@(For t i o) = For (T.App T.tracetf t) (trace tid i)
-  (toScope (trace ((F <$> k) `nest` fScope) (fromScope o)))
-  where
+  ((hoistScope (trace tid) o))
+  -- (toScope (trace ((F <$> k) `nest` fScope) (fromScope o)))
+  -- (hoistScope (trace (dist ((F <$> k) `nest` toScope (Trace (TrFor (T.App T.tracetf t)) (Record [("in", Var (F (B ()))), ("out", Var (B ()))]))))) o)
+  -- (toScope (trace _ (fromScope o)))
+  -- where
     -- fScope = toScope (Trace (TrFor undefined) (Record [("in", Var (F (B ()))), ("out", Var (B ()))]))
-    fScope = toScope (dist (toScope (Trace (TrFor (T.App T.tracetf t)) (Record [("in", Var (F (B ()))), ("out", Var (B ()))]))) :§ (T.App T.tracetf t) :$ (Var {- n -} (B ())))
+    -- fScope = toScope (dist (toScope (Trace (TrFor (T.App T.tracetf t)) (Record [("in", Var (F (B ()))), ("out", Var (B ()))]))) :§ (T.App T.tracetf t) :$ (Var {- n -} (B ())))
 trace k (Record fs) = case typeof (Record fs) of
   T.Record row -> Record ((\(l,_t) -> case lookup l fs of
                                         Nothing -> error "field not present"
                                         Just f -> (l, trace k f)) <$> T.rowToList row)
   _ -> error "not a record type"
-trace k (Proj l _ r) = Proj l undefined (trace k r)
+trace k (Proj l r) = Proj l (trace k r)
+-- trace k (Proj l r) = Proj l (instantiate1 (trace tid r) k)
 trace k (Table n (T.Record row)) = For (T.Record row) (Table n (T.Record row))
   (toScope (Singleton (Record (map (\(l,_) -> (l, fromScope $ k `nest` tblScope l)) (T.rowToList row)))))
   where tblScope l = toScope $ Trace TrRow (Record [("table", Const (String n)),
                                                     ("column", Const (String l)),
-                                                    ("data", Proj l undefined (Var (B ())))])
+                                                    ("data", Proj l (Var (B ())))])
+trace k (Eq t l r) = instantiate1 (Trace (TrEq t) (Record [("left", trace tid l), ("right", trace tid r)])) k
+trace _ (Table _ _) = error "table of non-record type elements"
 trace _ Bottom = error "Can't trace Bottom"
 trace _ Lam{} = error "Can't trace Lam"
 trace _ TLam{} = error "Can't trace TLam"
@@ -528,8 +501,8 @@ trace _ Tracecase{} = error "Can't trace Tracecase"
 trace _ Trace{} = error "Can't trace Trace"
 
 -- dist :: Scope () (Expr Type a) x -> Scope () (Expr Type a) x
-dist :: Scope () (Expr Type a) x -> Expr Type a (Var b x)
-dist k = Fix (T.Forall T.KType (toScope (T.Arrow (T.App T.tracetf (T.Var (B ()))) (T.App T.tracetf (T.Var (B ())))))) $ toScope $
+dist :: Eq a => Scope () (Expr Type a) x -> Scope () (Expr Type a) x
+dist k = toScope $ Fix (T.Forall T.KType (toScope (T.Arrow (T.App T.tracetf (T.Var (B ()))) (T.App T.tracetf (T.Var (B ())))))) $ toScope $
   TLam T.KType (Typecase (toScope (T.Var (B ())))
                 Bottom Bottom Bottom
                 (Lam (toScope (toScope (T.List (T.Var (B ())))))
@@ -546,15 +519,34 @@ typeof (Var x) = error $ "unannotated var " ++ show x
 typeof (Const (Bool _)) = T.Bool
 typeof (Const (Int _)) = T.Int
 typeof (Const (String _)) = T.String
--- typeof (_ ::: t) = t
+typeof (Bottom ::: t) = t
+typeof (e ::: t) = assert (typeof e == t) t
 typeof (Record fs) = T.Record (rowType fs)
   where rowType [] = T.RowNil
         rowType ((l,e):es) = T.RowCons l (typeof e) (rowType es)
 typeof (Singleton e) = T.List (typeof e)
-typeof (Proj l _ e) = case typeof e of
+typeof (Proj l e) = case typeof e of
   T.Record row -> case lookup l (T.rowToList row) of
+    Nothing -> error "Label not found in record"
     Just t -> t
--- typeof (For t i o) = typeof (instantiate1 (Bottom ::: t) o)
+  _ -> error "Not a record type in projection"
+typeof (If c t e) =
+  assert (typeof c == T.Bool) $
+  assert (typeof t == typeof e) $
+  typeof t
+typeof (Empty c) = T.List c
+typeof (Concat l r) =
+  assert (typeof l == typeof r) $
+  typeof l
+typeof Lam{} = error "todo"
+typeof TLam{} = error "todo"
+typeof Fix{} = error "todo"
+typeof (For t i o) =
+  assert (typeof i == T.List t) $
+  typeof (instantiate1 (Bottom ::: t) o)
+typeof (Table _ (T.Record row)) =
+  assert (all (T.isBaseType . snd) (T.rowToList row)) $
+  T.List (T.Record row)
 
 -- Takes two expressions which each have one hole in them, and plugs
 -- the hole in the first expression with the second expression,
@@ -576,11 +568,14 @@ putC c = do
   putDoc $ T.prettyType tvars False c
   putStrLn ""
 
+showTraced :: Expr Type String String -> IO ()
 showTraced e = do
   putStrLn "===================="
   putE e
   putStrLn "-------trace---->"
-  putE $ (!! 20) . iterate one $ unroll 2 $ trace' e
+  putE $
+    -- (!! 120) . iterate one $ unroll 3 $
+    trace' e
 
 true, false :: Expr c a x
 true = Const (Bool True)
@@ -590,6 +585,90 @@ int :: Int -> Expr c a x
 int = Const . Int
 string :: String -> Expr c a x
 string = Const . String
+
+genIf :: Show x => Show a => Eq a => [(x, Type a)] -> Type a -> Gen (Expr Type a x)
+genIf env ty = Gen.subtermM3
+  (genTypedExpr env T.Bool)
+  (genTypedExpr env ty)
+  (genTypedExpr env ty)
+  (\a b c -> pure (If a b c))
+
+genFor :: Eq a => Show x => Show a => [(x, Type a)] -> Type a -> Gen (Expr Type a x)
+genFor env et = do
+  it <- T.genType
+  ie <- genTypedExpr env (T.List it)
+  oe <- genTypedExpr ((B (), it):(first F <$> env)) (T.List et)
+  pure (For it ie (toScope oe))
+
+boundVars :: HasCallStack => Eq a => Show a => Show x =>
+  [(x, Type a)] -> Type a -> [ Gen (Expr Type a x) ]
+boundVars env ty = [ pure (Var x) | (x,t) <- env, t == ty ]
+
+genProj :: (Show a, Show x, Eq a) =>
+  [(x, Type a)] -> Type a -> Gen (Expr Type a x)
+genProj env ty = do
+  (l:ls) <- T.genDistinctLabels
+  row <- T.genRowFromLabels ls
+  r <- genTypedExpr env (T.Record (T.RowCons l ty row))
+  pure (Proj l r)
+
+genTypedExpr :: HasCallStack => Eq a => Show x => Show a =>
+  [(x, Type a)] -> Type a -> Gen (Expr Type a x)
+genTypedExpr env ty = Gen.recursive Gen.choice
+  (genBase ++ boundVars env ty)
+  ([ genIf env ty, genProj env ty ] ++ genRec)
+  where
+    genBase = case ty of
+      T.Bool -> [ pure true, pure false ]
+      T.Int -> [ Gen.int (Range.constant 0 42) >>= (pure . int) ]
+      T.String -> [ Gen.string (Range.constant 0 10) (Gen.unicode) >>= (pure . string) ]
+      (T.List (T.Record row))
+        | all (T.isBaseType . snd) (T.rowToList row) ->
+          [ pure (Empty (T.Record row)),
+            do name <- T.genLabel
+               pure (Table name (T.Record row)) ]
+      (T.List et) -> [ pure (Empty et) ]
+      (T.Record row) -> [
+        do
+          fields <- traverse (\(l, t) ->
+                                 genTypedExpr env t >>= pure . (l,))
+                    (T.rowToList row)
+          pure (Record fields)
+        ]
+
+    genRec = case ty of
+      T.Bool -> []
+      T.Int -> []
+      T.String -> []
+      (T.List et) ->
+        [ Gen.subtermM (genTypedExpr env et) (pure . Singleton)
+        , Gen.subtermM2 (genTypedExpr env ty) (genTypedExpr env ty) (\l r -> pure (Concat l r))
+        , genFor env et ]
+      (T.Record _) -> []
+
+prop_norm_preserve :: Property
+prop_norm_preserve =
+  property $ do
+    t :: Type String <- forAll $ T.genType
+    e :: Expr Type String String <- forAll $ genTypedExpr [] t
+    n <- forAll $ Gen.int (Range.linear 0 100)
+    norm <- eval $ (!! n) . iterate one $ e
+    typeof norm === t
+
+prop_genTypedExpr_typeof :: HasCallStack => Property
+prop_genTypedExpr_typeof =
+  property $ do
+    t <- forAll $ T.genType
+    e :: Expr Type String String <- forAll $ genTypedExpr [] t
+    te <- eval (typeof e)
+    te === t
+
+tests :: IO Bool
+tests =
+  checkParallel $ Group "group"
+  [ ("genTypedExpr generates well-typed terms", prop_genTypedExpr_typeof)
+  , ("one preserves types across iterations", prop_norm_preserve)
+  ]
 
 someFunc :: IO ()
 someFunc = do
@@ -605,146 +684,21 @@ someFunc = do
   showTraced $ If true (Concat (Singleton true) (Singleton false)) (Empty T.Bool)
   
   showTraced $ for "x" T.Bool (Singleton true) (Singleton true)
-  showTraced $ for "a" T.Bool (Singleton true) (for "b" T.Bool (Singleton false) (Singleton (Record [("a", Var "a"), ("b", Var "b")])))
+  showTraced $ for "x" (T.List T.Bool) (Singleton (Singleton true)) (If true (Var "x") (Singleton false))
 
-  let recRec = Record [("a", Record [("b", true)])]
-  showTraced $ Proj "b" undefined (Proj "a" undefined recRec)
+  -- putStrLn "------ random term -------"
+  -- ty <- Gen.sample T.genType
+  -- putC ty
+  -- ex <- Gen.sample (genTypedExpr [] ty)
+  -- putE ex
+  -- let n = (!! 100) . iterate one $ ex
+  -- putE $ n
+  -- putC (typeof ex)
+  -- putC (typeof n)
 
-  showTraced $ for "x" (T.Record (T.RowCons "b" T.Bool T.RowNil)) (Singleton (Record [("b", true)])) (Singleton (Var "x"))
-  showTraced $ for "x" (T.Record (T.RowCons "b" T.Bool T.RowNil)) (Singleton (Record [("b", true)])) (Singleton (Proj "b" undefined (Var "x")))
-  putStrLn "This used to be broken. It's not actually in normal form though. However, with tables we can have expressions like this, so it's good to have it working anyways."
-
-  let crab = T.Record (T.RowCons "a" T.String (T.RowCons "b" T.Bool T.RowNil))
-  let tableABs = Table "abs" crab
-  showTraced $ tableABs
-
-  let xFromTable = for "x" crab tableABs (Singleton (Var "x"))
-  showTraced $ xFromTable
-  let asFromTable = for "x" crab tableABs (Singleton (Proj "a" undefined (Var "x")))
-  showTraced $ asFromTable
-
-  -- let forIfProj = efor "x" (TT crab) tableABs (ESingletonList (EIf (EProj "b" (TT crab) (EVar "x")) (EProj "a" (TT crab) (EVar "x")) (EString "fake")))
-  -- putE $ forIfProj
-  -- putE $ trace (TT (CList CString)) forIfProj
-  -- putE $ (!! 22) . iterate one $ unroll 1 $ EApp (trace (TT (CList CString)) forIfProj) traceId
-
-  -- putStrLn "----------------------------------------------------------------------"
-
-  -- let xFromTable = efor "x" (TT crab) tableABs (ESingletonList (EVar "x"))
-  -- putE $ xFromTable
-  -- putStrLn "traced:"
-  -- let tXFromTable = EApp (trace (TT (CList crab)) xFromTable) traceId
-  -- putE $ tXFromTable
-  -- putE $ ((!! 12) . iterate one) $ unroll 0 $ tXFromTable
-
-  -- putStrLn "Ugh. No, that's still broken. Tables? Comprehensions? Records?"
-
-  -- let forfor = elam "foo" TBool $ efor "x" TBool (efor "y" TBool (EVar "L") (EApp (EVar "M") (EVar "y"))) (EApp (EApp (EVar "N") (EVar "x")) (EVar "foo"))
-  -- putE forfor
-  -- putE $ one $ forfor
-
-  -- putStrLn "-----------------------------------------------------"
-
-  -- let valueTXFromTable = E(:§) value (CApp tracetf (CList crab))
-  -- putStrLn "specialized value function"
-  -- let specVal = ((!! 11) . iterate one) $ unroll 4 $ valueTXFromTable
-  -- putE $ specVal
-
-  -- let unTXFromTable = EApp specVal tXFromTable
-  -- putStrLn "whole thing normalized:"
-  -- putE $ (!! 24) . iterate one $ unroll 4 $ unTXFromTable
-  -- putE $ ((!! 100) . iterate one) $ unroll 3 $ valueTXFromTable
-  -- let unTTXFromTable = EApp valueTXFromTable tXFromTable
-  -- putE $ ((!! 200) . iterate one) $ unroll 4 $ unTTXFromTable
-  --                        
-  -- putE $ tXFromTable
-  -- putE $ ((!! 16) . iterate one) $ unroll 2 $ tXFromTable
-
-
-  -- let selfJoin = efor "x" (TT crab) tableABs (efor "y" (TT crab) tableABs
-  --                  (EIf (EEq (TT CString) (EProj "a" (TT crab) (EVar "x")) (EProj "a" (TT crab) (EVar "y")))
-  --                       (ESingletonList (ERecord [("x", EVar "x"), ("y", EVar "y")]))
-  --                       EEmptyList))
-
-  -- putE $ Empty T.Bool
-  -- putE $ Singleton (Const (Bool True))
-  -- putE $ Concat (Empty T.Bool) (Singleton (Const (Bool True)))
-  -- putE $ one $ Concat (Empty T.Bool) (Singleton (Const (Bool True)))
-
-  -- putE selfJoin
-  -- putE $ betaReduceN 17 $ EApp (trace (TT (CList (CRecord (CRowCons "x" crab (CRowCons "y" crab CRowNil))))) selfJoin) traceId
-  -- putE $ ((!! 18) . iterate one) $ unroll 1 $ EApp (trace (TT (CList (CRecord (CRowCons "x" crab (CRowCons "y" crab CRowNil))))) selfJoin) (E(:§) value (CApp tracetf (CList (CRecord (CRowCons "x" crab (CRowCons "y" crab CRowNil))))))
-
-
-
-  -- putE $ EApp (trace (TT (CList crab)) tableABs) traceId
-  -- putE $ ((!! 3) . iterate one) $ EApp (trace (TT (CList crab)) tableABs) traceId
-  -- putC (CList (CRecord (CRowCons "a" (CTrace CString) (CRowCons "b" (CTrace CBool) CRowNil))))
-  -- putC (CApp tracetf (CList crab))
-  -- putC (normC (CApp tracetf (CList crab)))
-
-  
-
-
-  -- let eqLists = EEq (TT (CList CString)) (ESingletonList (EString "a")) EEmptyList
-  -- putE eqLists
-  -- putE $ betaReduceN 6 $ EApp (trace (TT CBool) eqLists) traceId
-
-  -- let eqEq = EEq (TT CBool) eqLists ETrue
-  -- putE eqEq
-  -- putE $ betaReduceN 2 $ EApp (trace (TT CBool) eqEq) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 4 $ EApp (trace (TT CBool) eqEq) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 6 $ EApp (trace (TT CBool) eqEq) (traceId (CVar "TRACE"))
-  -- putE $ betaReduceN 8 $ EApp (trace (TT CBool) eqEq) traceId
-
-  -- putE $ value
-
-  -- putE selfJoin
-  -- putE $ betaReduceN 17 $ EApp (trace (TT (CList (CRecord (CRowCons "x" crab (CRowCons "y" crab CRowNil))))) selfJoin) traceId
-  -- let selfJoinValue = EApp (EApp (trace (TT (CList (CRecord (CRowCons "x" crab (CRowCons "y" crab CRowNil))))) selfJoin) traceId) value
-  -- putE $ spec $ betaReduceN 20 $ unroll 4 $ betaReduceN 20 selfJoinValue
-
-  -- let foo = EFix (TT CBool) (toScope $ EApp (EApp (EVar (F "bla")) (EVar (B ()))) (EVar (F "blubb")))
-  -- let bar = EFix (TT CBool) (toScope $ EApp (EApp (EApp (EApp (EVar (F "a")) (EVar (B ()))) (EVar (F "b"))) (F <$> foo)) (EVar (F "c")))
-  -- putE foo
-  -- putE $ unroll 0 foo
-  -- putE $ unroll 1 foo
-  -- putE $ unroll 2 foo
-  -- putE bar
-  -- putE $ unroll 0 bar
-  -- putE $ unroll 1 bar
-  -- putE $ unroll 2 bar
-
-
-  -- let valBool = EApp (E(:§) value (CTrace CBool)) (ETrace (TrLit ETrue)) --(EVariant "Lit" ETrue)
-  -- putE valBool
-  -- putE (unroll 0 valBool)
-  -- putE (unroll 1 valBool)
-  -- putE (unroll 2 valBool)
-  -- putE $ betaReduceN 1 $ spec $ spec $ unroll 1 valBool
-  -- putE $ betaReduceN 2 $ spec $ spec $ unroll 1 valBool
-  -- putE $ ((!! 4) . iterate one) $ unroll 1 valBool
-
-  -- let simpleRmap = ERmap traceId (TT (CRecord (CRowCons "a" (CTrace CBool) (CRowCons "b" (CTrace CString) CRowNil)))) (ERecord [("a", EVariant "Lit" ETrue), ("b", EVariant "Lit" (EString "foo"))])
-  -- putE simpleRmap
-  -- putE $ ((!! 0) . iterate one) $ simpleRmap
-  -- putE $ ((!! 1) . iterate one) $ simpleRmap
-  -- putE $ ((!! 2) . iterate one) $ simpleRmap
-  -- putE $ ((!! 3) . iterate one) $ simpleRmap
-  -- putE $ ((!! 4) . iterate one) $ simpleRmap
-
-  -- let omega = EFix (TT CBool) (toScope (EApp (EVar (B ())) (EVar (B ()))))
-  -- putE $ omega
-  -- putE $ unroll 1 $ omega
-
-{-  let projForNested = efor "x" (TT (CRecord (CRowCons "b" CBool (CRowCons "a" CBool CRowNil)))) forNested (ESingletonList (EProj "a" (TT (CRecord (CRowCons "a" CBool (CRowCons "b" CBool CRowNil)))) (EVar "x")))
-  putE projForNested
-  putE $ betaReduceN 12 $ EApp (trace (TT (CList CBool)) projForNested) (traceId (CVar "TRACE"))
-  -- Fuck. Something is still wrong. Record projection, I think. Maybe I need RMAP?
-
-  let proj2 = efor "x" (TT (CRecord (CRowCons "a" CBool CRowNil))) (ESingletonList (ERecord [("a", ETrue)])) (ESingletonList (EProj "a" (TT (CRecord (CRowCons "a" CBool CRowNil))) (EVar "x")))
-  putE proj2
-  -- putE $ betaReduceN 0 $ EApp (trace (TT (CList CBool)) proj2) (traceId (CVar "TRACE"))
-  putE $ betaReduceN 10 $ EApp (trace (TT (CList CBool)) proj2) (traceId (CVar "TRACE"))
-
--}
+  res <- tests
+  putStrLn (show res)
+  -- putStrLn "------ another -------"
+  -- t' <- Gen.sample T.genType
+  -- putC t'
+  -- Gen.sample (genTypedExpr [] t') >>= putE

@@ -4,13 +4,19 @@
 module Type where
 
 import Data.Deriving (deriveShow1, deriveEq1)
+import Data.List (sort, nub, foldl', all)
 import Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 import qualified Text.PrettyPrint.ANSI.Leijen as P
 import Bound ((>>>=), Var(B,F))
 import Bound.Scope.Simple
+-- import Bound.Scope
 import Common
 import Control.Monad (ap)
 import GHC.Exts (sortWith)
+
+import           Hedgehog hiding (Var)
+import qualified Hedgehog.Gen as Gen
+import qualified Hedgehog.Range as Range
 
 data Kind = KType | KRow | KArrow Kind Kind
   deriving (Show, Eq)
@@ -74,7 +80,7 @@ prettyType :: [String] -> Bool -> Type String -> Doc
 prettyType [] _ _ = error "ran out of type variables during constructor pretty printing"
 -- TODO these might be needed for rowmap and stuff
 prettyType _ _ c | c == tracetf = text "TRACE"
-prettyType _ _ c | c == valuetf = text "TRACE"
+prettyType _ _ c | c == valuetf = text "VALUE"
 prettyType _ _ RowNil = error "row outside of record"
 prettyType _ _ (RowCons _ _ _) = error "row outside of record"
 prettyType _ _ Bool = text "Bool"
@@ -88,22 +94,23 @@ prettyType (av:avs) p (Lam k body) = pparens p $ hang 2 $ group $
           _ -> char ':' <> prettyKind k
 prettyType avs p (App a b) = pparens p $
   prettyType avs True a <+> prettyType avs True b
-prettyType avs p (List a) = pparens p $ text "List" <+> prettyType avs True a
+prettyType avs _ (List a) = brackets (prettyType avs False a)
+--pparens p $ text "List" <+> prettyType avs True a
 prettyType avs p (Trace a) = pparens p $ text "Trace" <+> prettyType avs True a
-prettyType _ p (Record (Var x)) = pparens p $ text "Record" <+> text x
-prettyType avs p (Record row) = pparens p $ text "Record" <+> parens (prettyRow avs row)
+-- prettyType _ p (Record (Var x)) = pparens p $ text "Record" <+> text x
+prettyType avs p (Record row) = braces (prettyRow avs row)
 prettyType avs p (Typerec x b i s l r t) = pparens p $ bold (text "Typerec") <+> prettyType avs True x </>
   tupled (map (prettyType avs False) [b, i, s, l, r, t])
 prettyType avs p (Arrow a b) = pparens p $ prettyType avs True a <+> text "->" <+> prettyType avs True b
-prettyType (av:avs) p (Forall k t) = pparens p $ char '∀' <> text av <> char '.' <> prettyType avs False (instantiate1 (Var av) t)
+prettyType (av:avs) p (Forall k t) = pparens p $ bold (char '∀') <> text av <> char '.' <> prettyType avs False (instantiate1 (Var av) t)
 
 prettyRow :: [String] -> Type String -> Doc
-prettyRow _ RowNil = char '⋅'
+prettyRow _ RowNil = empty
+prettyRow _ (Var x) = char '|' <> text x
 prettyRow avs (RowCons l c RowNil) =
-  text l <> char ':' <+> prettyType avs False c
+  dullblue (text l) <> char ':' <+> prettyType avs False c
 prettyRow avs (RowCons l c r) =
-  text l <> char ':' <+> prettyType avs False c <> char ',' <+> prettyRow avs r
-prettyRow _ (Var x) = text x
+  dullblue (text l) <> char ':' <+> prettyType avs False c <> char ',' <+> prettyRow avs r
 prettyRow _ _ = error "not a row"
 
 -- the TRACE type function
@@ -152,3 +159,39 @@ norm (Typerec x b i s l r t) = norm $ case norm x of
 norm (RowMap _ RowNil) = RowNil
 norm (RowMap f (RowCons l c r)) = norm $ RowCons l (App f c) (RowMap f r)
 norm (RowMap _ e) = error $ "Can't RowMap over " ++ show e
+
+isBaseType Bool = True
+isBaseType Int = True
+isBaseType String = True
+isBaseType _ = False
+
+genLabel = Gen.string (Range.constant 1 3) Gen.lower
+
+genDistinctLabels = nub <$> Gen.list (Range.constant 1 3) genLabel
+
+genBaseType :: Gen (Type a)
+genBaseType = Gen.choice (pure <$> [ Bool, Int, String ])
+
+genClosedRow :: Gen (Type a)
+genClosedRow = genDistinctLabels >>= genRowFromLabels
+
+genRowFromLabels :: [Label] -> Gen (Type a)
+genRowFromLabels labels = do
+  pairs <- traverse (\l -> genType >>= pure . (l,)) (sort labels)
+  pure (foldr (\(l, t) r -> RowCons l t r) RowNil pairs)
+  
+genType :: Gen (Type a)
+genType = Gen.recursive Gen.choice
+  [ genBaseType ]
+  [ Gen.subtermM genType (pure . List)
+  , do
+      row <- genClosedRow
+      pure (Record row)
+  ]
+
+hasNoVars :: Type a -> Bool
+hasNoVars Bool = True
+hasNoVars Int = True
+hasNoVars String = True
+hasNoVars (List t) = hasNoVars t
+hasNoVars (Record row) = all (hasNoVars . snd) (rowToList row)

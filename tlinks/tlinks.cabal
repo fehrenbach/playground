@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 5016aa208eab1450d3a2df66a9d9cab37c2a797a5ea2f8e20587004c0d8ad32f
+-- hash: d2013693bd52d5437e1636c263b135b97c027c9cf55d3bb5d53c49007f5b1213
 
 name:           tlinks
 version:        0.1.0.0
@@ -39,6 +39,7 @@ library
     , base >=4.7 && <5
     , bound
     , deriving-compat
+    , hedgehog
     , mmorph
   default-language: Haskell2010
 
@@ -54,6 +55,7 @@ executable tlinks-exe
     , base >=4.7 && <5
     , bound
     , deriving-compat
+    , hedgehog
     , mmorph
     , tlinks
   default-language: Haskell2010
@@ -71,6 +73,7 @@ test-suite tlinks-test
     , base >=4.7 && <5
     , bound
     , deriving-compat
+    , hedgehog
     , mmorph
     , tlinks
   default-language: Haskell2010
