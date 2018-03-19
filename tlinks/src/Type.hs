@@ -190,10 +190,3 @@ genType = Gen.recursive Gen.choice
       row <- genClosedRow
       pure (Record row)
   ]
-
-hasNoVars :: Type a -> Bool
-hasNoVars Bool = True
-hasNoVars Int = True
-hasNoVars String = True
-hasNoVars (List t) = hasNoVars t
-hasNoVars (Record row) = all (hasNoVars . snd) (rowToList row)

@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: d2013693bd52d5437e1636c263b135b97c027c9cf55d3bb5d53c49007f5b1213
+-- hash: bb6f2c5e992d404686d40d08138c96c8f45774374f18417d37f148779e127bdc
 
 name:           tlinks
 version:        0.1.0.0
@@ -28,6 +28,7 @@ source-repository head
 library
   exposed-modules:
       Common
+      Expr
       Lib
       Type
   other-modules:
