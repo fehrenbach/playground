@@ -285,13 +285,11 @@ prettyExpr (vs, tv:tvs) p (TLam k b) = pparens p $ hang 2 $ group $
   where kindAnnotation = case k of
           T.KType -> empty
           _ -> char ':' <> T.prettyKind k
--- prettyExpr ns p (EVariant l e) = pparens p $
-  -- dullgreen (text l) <+> prettyExpr ns True e
 prettyExpr ns p ((:$) l r) = pparens p $ hang 2 $
   prettyExpr ns (not $ isApp l) l P.<$> prettyExpr ns True r
 prettyExpr (vs, tvs) p ((:§) e c) = pparens p $
   prettyExpr (vs, tvs) (not $ isApp e) e </> T.prettyType tvs True c
-prettyExpr _ _ (Empty _) = brackets empty 
+prettyExpr (_,_tvs) _ (Empty _t) = brackets empty -- (T.prettyType tvs False t)
 prettyExpr ns _ (Singleton e) = brackets (prettyExpr ns False e)
 prettyExpr ns p (Concat a b) = pparens p $ prettyExpr ns True a <+> text "++" <+> prettyExpr ns True b
 prettyExpr ns p (Eq _t l r) = pparens p $ prettyExpr ns True l <+> text "==" <+> prettyExpr ns True r
@@ -452,15 +450,15 @@ trace (Var x ::: t) = Var x -- ::: t
 trace (Const c) = Trace TrLit (Const c)
 trace (If c t e) =
   If (value :§ T.Trace T.Bool :$ trace c)
-  ((dist (toScope (Trace TrIf (Record [("cond", F <$> trace c), ("out", Var (B ()))]))) (typeof t)) :$ trace t)
-  ((dist (toScope (Trace TrIf (Record [("cond", F <$> trace c), ("out", Var (B ()))]))) (typeof e)) :$ trace e)
+  ((distTRACE (toScope (Trace TrIf (Record [("cond", F <$> trace c), ("out", Var (B ()))]))) (typeof t)) :$ trace t)
+  ((distTRACE (toScope (Trace TrIf (Record [("cond", F <$> trace c), ("out", Var (B ()))]))) (typeof e)) :$ trace e)
 trace (Empty c) = Empty (T.App T.tracetf c)
 trace (Singleton e) = Singleton (trace e)
 trace (Concat l r) = Concat (trace l) (trace r)
 trace (For it ie o) =
   For (T.App T.tracetf it) (trace ie)
-      (toScope (dist (toScope (Trace (TrFor (T.App T.tracetf it))
-                               (Record [("in", Var (F (B ()))), ("out", Var (B ()))])))
+      (toScope (distTRACE (toScope (Trace (TrFor (T.App T.tracetf it))
+                                    (Record [("in", Var (F (B ()))), ("out", Var (B ()))])))
                  (typeof (instantiate1 (Bottom ::: it) o))
                  :$ trace (fromScope o)))
 trace (Record fields) = Record (second trace <$> fields)
@@ -470,6 +468,8 @@ trace (Table n (T.Record row)) = For (T.Record row) (Table n (T.Record row))
   where tblTrace l = Trace TrRow (Record [("table", Const (String n)),
                                           ("column", Const (String l)),
                                           ("data", Proj l (Var (B ())))])
+
+distTRACE k t = dist k (T.norm (T.App T.tracetf t))
 
 dist :: forall a x. Scope () (Expr Type a) x -> Type a -> Expr Type a x
 dist k T.Bool = Lam T.Bool k -- these shouldn't happen, right?
@@ -482,6 +482,7 @@ dist k (T.Record row) = Lam (T.Record row) (toScope (Record (map field (T.rowToL
     field (l, t) = (l, (F <$> dist k t) :$ (Proj l (Var (B ()))))
 dist k (T.Trace t) = Lam (T.Trace t) k
 
+-- Ugh. I might need an actual typechecker...
 typeof :: HasCallStack => Show x => Eq a => Expr Type a x -> Type a
 typeof Bottom = error "bottom"
 typeof (Var x) = error $ "unannotated var " ++ show x
@@ -501,22 +502,48 @@ typeof (Proj l e) = case typeof e of
     Just t -> t
   _ -> error "Not a record type in projection"
 typeof (If c t e) =
-  assert (typeof c == T.Bool) $
-  assert (typeof t == typeof e) $
+  -- assert (typeof c == T.Bool) $
+  -- assert (typeof t == typeof e) $
   typeof t
 typeof (Empty c) = T.List c
 typeof (Concat l r) =
-  assert (typeof l == typeof r) $
+  -- assert (typeof l == typeof r) $
   typeof l
-typeof Lam{} = error "todo"
-typeof TLam{} = error "todo"
-typeof Fix{} = error "todo"
+typeof (f :$ a) = case typeof f of
+  T.Arrow ta tb -> {- assert (ta == typeof a) $ -} tb
+  _ -> error "not a function type"
+typeof (Lam a b)  = T.Arrow a (typeof (instantiate1 (Bottom ::: a) b))
+typeof (Fix t b) = typeof (instantiate1 (Bottom ::: t) b)
+typeof (TLam k b) =
+  let t = typeof (eInstantiateC1 (T.Var undefined) b)
+  in T.Forall k (toScope (F <$> t))
+typeof ((TLam k b) :§ t) = typeof (eInstantiateC1 t b)
+ -- this is not right, should check function to T.Forall, like :$
+typeof (f :§ t) = case T.norm (typeof f) of
+  T.Lam k b -> error "type lam"
+  T.Forall k b -> instantiate1 t b
+typeof (Trace TrLit c) = T.Trace (typeof c)
+typeof (Trace TrIf i) = typeof (Proj "out" i)
+typeof (Trace (TrFor _) i) = typeof (Proj "out" i)
+typeof (Trace TrRow r) = T.Trace (typeof (Proj "data" r))
+typeof (Trace (TrEq _) r) = T.Trace T.Bool
 typeof (For t i o) =
-  assert (typeof i == T.List t) $
+  -- assert (typeof i == T.List t) $
   typeof (instantiate1 (Bottom ::: t) o)
 typeof (Table _ (T.Record row)) =
   assert (all (T.isBaseType . snd) (T.rowToList row)) $
   T.List (T.Record row)
+typeof (Table _ _) = error "nonrecord table type"
+typeof (Rmap _ _ _) = error "todo"
+typeof (Eq _ _ _) = error "todo"
+typeof (Typecase x b i s l r t) = case T.norm x of
+  T.Bool -> typeof b
+  T.Int -> typeof i
+  T.String -> typeof s
+  T.List et -> typeof (eInstantiateC1 et l)
+  T.Record row -> typeof (eInstantiateC1 row r)
+  T.Trace et -> typeof (eInstantiateC1 et t)
+  T.Var _ -> error "uh, dunno"
 
 
 putE :: Expr Type String String -> IO ()
@@ -548,11 +575,12 @@ string :: String -> Expr c a x
 string = Const . String
 
 genIf :: Show x => Show a => Eq a => [(x, Type a)] -> Type a -> Gen (Expr Type a x)
-genIf env ty = Gen.subtermM3
-  (genTypedExpr env T.Bool)
-  (genTypedExpr env ty)
-  (genTypedExpr env ty)
-  (\a b c -> pure (If a b c))
+genIf env ty = do
+  c <- genTypedExpr env T.Bool
+  Gen.subtermM2
+    (genTypedExpr env ty)
+    (genTypedExpr env ty)
+    (\t e -> pure (If c t e))
 
 genFor :: Eq a => Show x => Show a => [(x, Type a)] -> Type a -> Gen (Expr Type a x)
 genFor env et = do
@@ -602,7 +630,7 @@ genTypedExpr env ty = Gen.recursive Gen.choice
       T.Int -> []
       T.String -> []
       (T.List et) ->
-        [ Gen.subtermM (genTypedExpr env et) (pure . Singleton)
+        [ genTypedExpr env et >>= pure . Singleton
         , Gen.subtermM2 (genTypedExpr env ty) (genTypedExpr env ty) (\l r -> pure (Concat l r))
         , genFor env et ]
       (T.Record _) -> []
@@ -624,11 +652,22 @@ prop_genTypedExpr_typeof =
     te <- eval (typeof e)
     te === t
 
+prop_trace_type :: Property
+prop_trace_type =
+  property $ do
+  t <- forAll $ T.genType
+  e :: Expr Type String String <- forAll $ genTypedExpr [] t
+  tre <- eval $ (!! 100) . iterate one $ unroll 5 $ trace e
+  tretype <- eval (T.norm (typeof tre))
+  normt <- eval (T.norm (T.App T.tracetf t))
+  tretype === normt
+
 tests :: IO Bool
 tests =
   checkParallel $ Group "group"
   [ ("genTypedExpr generates well-typed terms", prop_genTypedExpr_typeof)
   , ("one preserves types across iterations", prop_norm_preserve)
+  , ("traced terms have TRACE type after some normalization", prop_trace_type)
   ]
 
 someFunc :: IO ()

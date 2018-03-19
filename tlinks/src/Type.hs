@@ -136,7 +136,7 @@ rowToList = sortWith fst . rowToList'
     rowToList' (RowCons l c r) = (l, c) : rowToList' r
     rowToList' _ = error "not a row"
 
-norm :: Show a => Eq a => Type a -> Type a
+norm :: Eq a => Type a -> Type a
 norm Bool = Bool
 norm Int = Int
 norm String = String
@@ -144,10 +144,12 @@ norm (Var v) = Var v
 norm (Lam k b) = Lam k b -- can't normalize under binder, because .. why?
 norm (App f a) = case norm f of
   (Lam _ b) -> norm $ instantiate1 a b
-  e -> error $ "trying to apply non-type function " ++ show e
+  e -> error $ "trying to apply non-type function "
 norm (List c) = List (norm c)
 norm (Trace c) = Trace (norm c)
 norm (Record c) = Record (norm c)
+norm (Arrow a b) = Arrow (norm a) (norm b)
+norm (Forall k b) = Forall k (hoistScope norm b)
 norm RowNil = RowNil
 norm (RowCons l c r) = RowCons l (norm c) (norm r)
 norm (Typerec x b i s l r t) = norm $ case norm x of
@@ -155,10 +157,10 @@ norm (Typerec x b i s l r t) = norm $ case norm x of
   List c -> App (App l c) (Typerec c b i s l r t)
   Record c -> App (App r c) (RowMap (Lam KType (toScope (Typerec (Var (B ())) (F <$> b) (F <$> i) (F <$> s) (F <$> l) (F <$> r) (F <$> t)))) c)
   Trace c -> App (App t c) (Typerec c b i s l r t)
-  stuck -> error $ show stuck-- Typerec stuck b i s l r t
+  -- stuck -> error $ show stuck-- Typerec stuck b i s l r t
 norm (RowMap _ RowNil) = RowNil
 norm (RowMap f (RowCons l c r)) = norm $ RowCons l (App f c) (RowMap f r)
-norm (RowMap _ e) = error $ "Can't RowMap over " ++ show e
+norm (RowMap _ e) = error $ "Can't RowMap over " -- ++ show e
 
 isBaseType Bool = True
 isBaseType Int = True
