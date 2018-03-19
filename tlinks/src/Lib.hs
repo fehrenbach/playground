@@ -468,7 +468,9 @@ trace (Table n (T.Record row)) = For (T.Record row) (Table n (T.Record row))
   where tblTrace l = Trace TrRow (Record [("table", Const (String n)),
                                           ("column", Const (String l)),
                                           ("data", Proj l (Var (B ())))])
+trace (Eq t l r) = Trace (TrEq (T.App T.tracetf t)) (Record [("left", trace l), ("right", trace r)])
 
+-- Calls dist, but applies the TRACE type function to the type argument first
 distTRACE k t = dist k (T.norm (T.App T.tracetf t))
 
 dist :: forall a x. Scope () (Expr Type a) x -> Type a -> Expr Type a x
@@ -535,7 +537,7 @@ typeof (Table _ (T.Record row)) =
   T.List (T.Record row)
 typeof (Table _ _) = error "nonrecord table type"
 typeof (Rmap _ _ _) = error "todo"
-typeof (Eq _ _ _) = error "todo"
+typeof (Eq _ _ _) = T.Bool
 typeof (Typecase x b i s l r t) = case T.norm x of
   T.Bool -> typeof b
   T.Int -> typeof i
@@ -544,7 +546,7 @@ typeof (Typecase x b i s l r t) = case T.norm x of
   T.Record row -> typeof (eInstantiateC1 row r)
   T.Trace et -> typeof (eInstantiateC1 et t)
   T.Var _ -> error "uh, dunno"
-
+typeof Tracecase{} = error "tracecase"
 
 putE :: Expr Type String String -> IO ()
 putE e = do
@@ -601,6 +603,8 @@ genProj env ty = do
   r <- genTypedExpr env (T.Record (T.RowCons l ty row))
   pure (Proj l r)
 
+-- TODO this *very* rarely produces terms that use bound variables
+-- (and never free variables, but that's good).
 genTypedExpr :: HasCallStack => Eq a => Show x => Show a =>
   [(x, Type a)] -> Type a -> Gen (Expr Type a x)
 genTypedExpr env ty = Gen.recursive Gen.choice
@@ -626,7 +630,11 @@ genTypedExpr env ty = Gen.recursive Gen.choice
         ]
 
     genRec = case ty of
-      T.Bool -> []
+      T.Bool -> [ do t <- T.genType
+                     l <- genTypedExpr env t
+                     r <- genTypedExpr env t
+                     pure (Eq t l r)
+                ]
       T.Int -> []
       T.String -> []
       (T.List et) ->
@@ -652,9 +660,10 @@ prop_genTypedExpr_typeof =
     te <- eval (typeof e)
     te === t
 
+-- This fails when the query expression uses variables, because they
+-- are not type-annotated.
 prop_trace_type :: Property
-prop_trace_type =
-  property $ do
+prop_trace_type = property $ do
   t <- forAll $ T.genType
   e :: Expr Type String String <- forAll $ genTypedExpr [] t
   tre <- eval $ (!! 100) . iterate one $ unroll 5 $ trace e
@@ -662,12 +671,21 @@ prop_trace_type =
   normt <- eval (T.norm (T.App T.tracetf t))
   tretype === normt
 
+-- prop_trace_value_type :: Property
+-- prop_trace_value_type = property $ do
+  -- t <- forAll $ T.genType
+  -- e :: Expr Type String String <- forAll $ genTypedExpr [] t
+  -- val <- eval $ (!! 1000) . iterate one $ unroll 20 (value :§ (T.App T.tracetf t) :$ trace e)
+  -- footnoteShow val
+  -- typeof val === t
+
 tests :: IO Bool
 tests =
   checkParallel $ Group "group"
   [ ("genTypedExpr generates well-typed terms", prop_genTypedExpr_typeof)
   , ("one preserves types across iterations", prop_norm_preserve)
   , ("traced terms have TRACE type after some normalization", prop_trace_type)
+  -- , ("`value` of traced terms has same type", prop_trace_value_type)
   ]
 
 someFunc :: IO ()
@@ -698,6 +716,9 @@ someFunc = do
 
   let bsFromTable = for "x" crab tableABs (Singleton (Proj "b" (Var "x" ::: crab)))
   showTraced $ for "y" T.Bool bsFromTable $ If (Var "y" ::: T.Bool) (Singleton (int 1)) (Empty T.Int)
+
+  showTraced (Empty T.Bool)
+  putE $ (!! 100) . iterate one $ unroll 5 $ value :§ T.App T.tracetf (T.List T.Bool) :$ trace (Empty T.Bool)
 
   -- putStrLn "------ random term -------"
   -- ty <- Gen.sample T.genType
