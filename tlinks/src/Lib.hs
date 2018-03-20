@@ -214,9 +214,9 @@ trace (Eq t l r) = Trace (TrEq (T.App T.tracetf t)) (Record [("left", trace l), 
 distTRACE k t = dist k (T.norm (T.App T.tracetf t))
 
 dist :: forall a x. Scope () (Expr Type a) x -> Type a -> Expr Type a x
-dist k T.Bool = Lam T.Bool k -- these shouldn't happen, right?
-dist k T.Int = Lam T.Int k
-dist k T.String = Lam T.String k
+-- dist k T.Bool = Lam T.Bool k -- these shouldn't happen, right?
+-- dist k T.Int = Lam T.Int k
+-- dist k T.String = Lam T.String k
 dist k (T.List t) = Lam (T.List t) (toScope (For t (Var (B ())) (toScope (Singleton ((F . F <$> dist k t) :$ (Var (B ())))))))
 dist k (T.Record row) = Lam (T.Record row) (toScope (Record (map field (T.rowToList row))))
   where
