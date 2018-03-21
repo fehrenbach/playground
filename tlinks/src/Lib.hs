@@ -210,6 +210,25 @@ trace (Table n (T.Record row)) = For (T.Record row) (Table n (T.Record row))
                                           ("data", Proj l (Var (B ())))])
 trace (Eq t l r) = Trace (TrEq (T.App T.tracetf t)) (Record [("left", trace l), ("right", trace r)])
 
+-- | Annotate bound variables with the types recorded in their binders
+annVars :: Eq a => Expr Type a x -> Expr Type a x
+annVars (Const c) = Const c
+annVars (For t i o) = For t (annVars i)
+  (toScope (annVars (fromScope o >>= \case
+                        B () -> Var (B ()) ::: t
+                        F x -> Var (F x))))
+annVars (Empty c) = Empty c
+annVars (Singleton e) = Singleton (annVars e)
+annVars (Concat l r) = annVars l `Concat` annVars r
+annVars (If c t e) = If (annVars c) (annVars t) (annVars e)
+annVars e@(Var _ ::: t) = e
+annVars (Var _) = error "Variables should be annotated, is this free? Free variable handling needs thinking about and implementing."
+annVars (e ::: t) = annVars e ::: t
+annVars (Record l) = Record (second annVars <$> l)
+annVars (Proj l e) = Proj l (annVars e)
+annVars (Eq t l r) = Eq t (annVars l) (annVars r)
+annVars (Table n t) = Table n t
+
 -- Calls dist, but applies the TRACE type function to the type argument first
 distTRACE k t = dist k (T.norm (T.App T.tracetf t))
 
@@ -413,7 +432,7 @@ prop_trace_type :: Property
 prop_trace_type = property $ do
   t <- forAll $ T.genType
   e :: Expr Type String String <- forAll $ genTypedExpr [] t
-  tre <- eval $ (!! 100) . iterate one $ unroll 5 $ trace e
+  tre <- eval $ (!! 100) . iterate one $ unroll 5 $ trace . annVars $ e
   tretype <- eval (T.norm (typeof tre))
   normt <- eval (T.norm (T.App T.tracetf t))
   tretype === normt
@@ -451,6 +470,7 @@ someFunc = do
   showTraced $ for "x" T.Bool (Singleton true) (Singleton true)
   showTraced $ for "x" (T.List T.Bool) (Singleton (Singleton true)) (If true ((Var "x") ::: (T.List T.Bool)) (Singleton false))
 
+  putE $ annVars $ for "x" (T.List T.Bool) (Singleton (Singleton true)) (If true (Var "x") (Singleton false))
 
   let crab = T.Record (T.RowCons "a" T.String (T.RowCons "b" T.Bool T.RowNil))
   let tableABs = Table "abs" crab
