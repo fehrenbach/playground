@@ -347,10 +347,17 @@ genProj env ty = do
 -- (and never free variables, but that's good).
 genTypedExpr :: HasCallStack => Eq a => Show x => Show a =>
   [(x, Type a)] -> Type a -> Gen (Expr Type a x)
-genTypedExpr env ty = Gen.recursive Gen.choice
-  (genBase ++ boundVars env ty)
-  ([ genIf env ty, genProj env ty ] ++ genRec)
+genTypedExpr env ty = Gen.sized $ \size ->
+  -- this is like Gen.recursive, but I didn't get how to do that with Gen.frequency
+  if size <= 1
+  then Gen.frequency base
+  else Gen.frequency (base ++ map (second Gen.small) recu)
   where
+    -- If there is a variable we could use, we should often use it
+    base = map (1,) genBase ++ map (100,) (boundVars env ty)
+    -- Use type-specific generators (genRec) more often than polymorphic generators (if, proj,..)
+    recu = map (1,) [ genIf env ty, genProj env ty ] ++ map (2,) genRec
+
     genBase = case ty of
       T.Bool -> [ pure true, pure false ]
       T.Int -> [ Gen.int (Range.constant 0 42) >>= (pure . int) ]
@@ -440,11 +447,11 @@ someFunc = do
                        (If true (string "else then") (string "else else"))
   showTraced $ Concat (If true (Singleton true) (Empty T.Bool)) (Singleton false)
   showTraced $ If true (Concat (Singleton true) (Singleton false)) (Empty T.Bool)
-  
+
   showTraced $ for "x" T.Bool (Singleton true) (Singleton true)
   showTraced $ for "x" (T.List T.Bool) (Singleton (Singleton true)) (If true ((Var "x") ::: (T.List T.Bool)) (Singleton false))
 
-  
+
   let crab = T.Record (T.RowCons "a" T.String (T.RowCons "b" T.Bool T.RowNil))
   let tableABs = Table "abs" crab
   showTraced $ tableABs
