@@ -210,6 +210,58 @@ trace (Table n (T.Record row)) = For (T.Record row) (Table n (T.Record row))
                                           ("data", Proj l (Var (B ())))])
 trace (Eq t l r) = Trace (TrEq (T.App T.tracetf t)) (Record [("left", trace l), ("right", trace r)])
 
+{-
+-- Do I need to do if-hoisting as a separate normalization procedure
+-- after beta-normalization and stuff or could I add the if-hoisting
+-- rules to my `one` function?
+
+-- Huh, the papers only describe primitive functions (equality and the
+-- like) on base types. Equality is easy enough to extend to closed
+-- records, you can even do it in the object language with recordfold.
+-- I wonder what Links does for open records, lists, and tables.
+
+-- I might want to define the language of query normal forms
+-- separately, because it kind of calls for multiple generators and
+-- n-ary concatenation. Or maybe I should generalize the respective
+-- Expr constructors? The other question is how to deal with variables
+-- and scopes. The Table case introduces a fresh variable, but then
+-- immediately goes to the calB Singleton case, so I could inline that
+-- to avoid having to conjure up a free variable from thin air.
+
+cal o (Proj l x) | T.isBaseType o = Proj l x
+cal (T.Record row) m = Record (map (\(l, t) -> (l, calF t l m)) (T.rowToList row))
+cal (T.List a) = _ (calB a [] true)
+
+calB a g l (Singleton m) = [ _nestedFors ]
+-- I think t is always a Table here, so "generators" are pairs of a
+-- table and a variable (name) that refers to it. I'm sure this is
+-- expressible with bound somehow.
+calB a g l (For _ t m) = calB a (g ++ [t]) l m
+calB a g l (Table n ty) = calB (Singleton _x) a (g ++ [t]) l -- fresh x?!
+calB a g l (Empty _) = []
+calB a g l (Concat m n) = calB a g l m ++ calB a g l n
+calB a g l (If l' m n) = calB a g (_and l l') m ++ calB a g (_and l (_not l')) n
+
+calF a l x@(Var _) = cal a (Proj l x)
+calF a l (Record fields) = case lookup l fields of
+  Just m -> cal a m
+
+-- Something like this?
+data Query x
+  = QVar x
+  | QConst Const
+  -- in a query we only ever project variables, so QProj Label x?
+  -- what about nested records? I guess they are not in the normal form,
+  -- but only constructed as a result?
+  | QProj Label (Query x)
+  | QUOp (Query x) -- NOT, EXISTS
+  | QBOp (Query x) (Query x) -- + - = < AND ...
+  | QFor [String]            --   FROM clause/table names
+         (Scope Int Query x) --  WHERE clause
+         (Scope Int Query x) -- SELECT clause/body
+  | QUnionAll [Query x]
+-}
+
 -- | Annotate bound variables with the types recorded in their binders
 annVars :: Eq a => Expr Type a x -> Expr Type a x
 annVars (Const c) = Const c
