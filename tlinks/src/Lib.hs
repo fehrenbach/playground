@@ -75,9 +75,8 @@ value = Fix (T.Forall T.KType (toScope (T.Arrow
                    )))
 
 unroll :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
-unroll 0 (Fix _ _) = Bottom
+unroll 0 (Fix _ _) = Const Bottom
 unroll n (Fix t b) = unroll (n-1) (instantiate1 (Fix t b) b)
-unroll _ Bottom = Bottom
 unroll _ (Const c) = Const c
 unroll _ (Var x) = Var x
 unroll n (If c t e) = If (unroll n c) (unroll n t) (unroll n e)
@@ -106,7 +105,6 @@ unroll n (Trace tr e) = Trace tr (unroll n e)
 unroll n (e ::: t) = (unroll n e) ::: t
 
 one :: Show x => Show a => Eq a => Expr Type a x -> Expr Type a x
-one Bottom = Bottom
 one (Const c) = Const c
 one (Var v) = Var v
 one (If (Const (Bool True)) t _) = t
@@ -199,7 +197,7 @@ trace (For it ie o) =
   For (T.App T.tracetf it) (trace ie)
       (toScope (distTRACE (toScope (Trace (TrFor (T.App T.tracetf it))
                                     (Record [("in", Var (F (B ()))), ("out", Var (B ()))])))
-                 (typeof (instantiate1 (Bottom ::: it) o))
+                 (typeof (instantiate1 (Const Bottom ::: it) o))
                  :$ trace (fromScope o)))
 trace (Record fields) = Record (second trace <$> fields)
 trace (Proj l r) = Proj l (trace r)
@@ -297,12 +295,12 @@ dist k (T.Trace t) = Lam (T.Trace t) k
 
 -- Ugh. I might need an actual typechecker...
 typeof :: HasCallStack => Show x => Eq a => Expr Type a x -> Type a
-typeof Bottom = error "bottom"
 typeof (Var x) = error $ "unannotated var " ++ show x
+typeof (Const Bottom) = error "bottom"
 typeof (Const (Bool _)) = T.Bool
 typeof (Const (Int _)) = T.Int
 typeof (Const (String _)) = T.String
-typeof (Bottom ::: t) = t
+typeof (Const Bottom ::: t) = t
 typeof (Var _ ::: t) = t
 typeof (e ::: t) = assert (typeof e == t) t
 typeof (Record fs) = T.Record (rowType fs)
@@ -325,8 +323,8 @@ typeof (Concat l r) =
 typeof (f :$ a) = case typeof f of
   T.Arrow ta tb -> {- assert (ta == typeof a) $ -} tb
   _ -> error "not a function type"
-typeof (Lam a b)  = T.Arrow a (typeof (instantiate1 (Bottom ::: a) b))
-typeof (Fix t b) = typeof (instantiate1 (Bottom ::: t) b)
+typeof (Lam a b)  = T.Arrow a (typeof (instantiate1 (Const Bottom ::: a) b))
+typeof (Fix t b) = typeof (instantiate1 (Const Bottom ::: t) b)
 typeof (TLam k b) =
   let t = typeof (eInstantiateC1 (T.Var undefined) b)
   in T.Forall k (toScope (F <$> t))
@@ -342,7 +340,7 @@ typeof (Trace TrRow r) = T.Trace (typeof (Proj "data" r))
 typeof (Trace (TrEq _) r) = T.Trace T.Bool
 typeof (For t i o) =
   -- assert (typeof i == T.List t) $
-  typeof (instantiate1 (Bottom ::: t) o)
+  typeof (instantiate1 (Const Bottom ::: t) o)
 typeof (Table _ (T.Record row)) =
   assert (all (T.isBaseType . snd) (T.rowToList row)) $
   T.List (T.Record row)

@@ -32,14 +32,14 @@ data Trace c
   deriving (Eq, Functor)
 
 data Const
-  = Bool Bool
+  = Bottom
+  | Bool Bool
   | Int Int
   | String String
   deriving (Show, Eq)
 
 data Expr c a x
-  = Bottom
-  | Const Const
+  = Const Const
   | Var x
   | If (Expr c a x) (Expr c a x) (Expr c a x)
   | Lam (c a) (Scope () (Expr c a) x)
@@ -80,7 +80,6 @@ instance (Eq a, Monad c) => Applicative (Expr c a) where
 instance (Eq a, Monad c) => Monad (Expr c a) where
   return = Var
 
-  Bottom >>= _ = Bottom
   Const c >>= _ = Const c
   Var x >>= f = f x
   Fix t b >>= f = Fix t (b >>>= f)
@@ -105,7 +104,6 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   e ::: t >>= f = (e >>= f) ::: t
 
 liftCE :: Monad c => Expr c a b -> Expr (Scope () c) a b
-liftCE Bottom = Bottom
 liftCE (Const c) = (Const c)
 liftCE (Var x) = Var x
 liftCE (e ::: t) = liftCE e ::: lift t
@@ -142,7 +140,6 @@ for x t i o = For t i (abstract1 x o)
 
 -- instantiate a constructor in an expression
 eInstantiateC1 :: Eq a => Monad c => c a -> Expr (Scope () c) a x -> Expr c a x
-eInstantiateC1 _ Bottom = Bottom
 eInstantiateC1 _ (Const c) = Const c
 eInstantiateC1 _ (Var x) = Var x
 eInstantiateC1 a (e ::: t) = (eInstantiateC1 a e) ::: instantiate1 a t
@@ -173,7 +170,6 @@ eInstantiateC1 a (Trace tr e) = Trace (fmap (instantiate1 a) tr) (eInstantiateC1
 
 -- abstract over a constructor in an expression
 eAbstractC1 :: Eq a => Functor c => a -> Expr c a x -> Expr (Scope () c) a x
-eAbstractC1 _ Bottom = Bottom
 eAbstractC1 _ (Const c) = Const c
 eAbstractC1 _ (Var x) = Var x
 eAbstractC1 a (Lam t b) = Lam (abstract1 a t) (hoistScope (eAbstractC1 a) b)
@@ -207,7 +203,7 @@ isApp _ = False
 prettyExpr :: ([String], [String]) -> Bool -> Expr Type String String -> Doc
 prettyExpr ([], _) _ _ = error "ran out of variable names"
 prettyExpr (_, []) _ _ = error "ran out of type variable names"
-prettyExpr _ _ Bottom = red (char '⊥')
+prettyExpr _ _ (Const Bottom) = red (char '⊥')
 prettyExpr _ _ (Const (Bool b)) = text (show b)
 prettyExpr _ _ (Const (Int b)) = text (show b)
 prettyExpr _ _ (Const (String b)) = dquotes $ text b
