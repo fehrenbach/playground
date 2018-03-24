@@ -49,7 +49,7 @@ data Expr c a x
   | (Expr c a x) :§ (c a)
   | Empty (c a)
   | Singleton (Expr c a x)
-  | Concat (Expr c a x) (Expr c a x)
+  | Concat [Expr c a x]
   -- (c a) is the type of ELEMENTS of the first Expr argument
   | For (c a) (Expr c a x) (Scope () (Expr c a) x)
   | Record [(Label, Expr c a x)]
@@ -90,7 +90,7 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   (:§) e c >>= f = (:§) (e >>= f) c
   Empty t >>= _ = Empty t
   Singleton a >>= f = Singleton (a >>= f)
-  Concat a b >>= f = Concat (a >>= f) (b >>= f)
+  Concat l >>= f = Concat (map (>>= f) l)
   Record le >>= f = Record (map (\(l, x) -> (l, x >>= f)) le)
   Rmap a t b >>= f = Rmap (a >>= f) t (b >>= f)
   If i t e >>= f = If (i >>= f) (t >>= f) (e >>= f)
@@ -115,7 +115,7 @@ liftCE (TLam k b) = TLam k (liftCE b)
 liftCE ((:§) e c) = (:§) (liftCE e) (lift c)
 liftCE (Empty t) = Empty (lift t)
 liftCE (Singleton e) = Singleton (liftCE e)
-liftCE (Concat a b) = Concat (liftCE a) (liftCE b)
+liftCE (Concat l) = Concat (liftCE <$> l)
 liftCE (If i t e) = If (liftCE i) (liftCE t) (liftCE e)
 liftCE (Record l) = Record (mapSnd liftCE l)
 liftCE (Rmap a t b) = Rmap (liftCE a) (lift t) (liftCE b)
@@ -150,7 +150,7 @@ eInstantiateC1 a (TLam k b) = TLam k (eInstantiateC1 (lift a) b)
 eInstantiateC1 a ((:§) e c) = (:§) (eInstantiateC1 a e) (instantiate1 a c)
 eInstantiateC1 a (Empty c) = Empty (instantiate1 a c)
 eInstantiateC1 a (Singleton e) = Singleton (eInstantiateC1 a e)
-eInstantiateC1 t (Concat a b) = Concat (eInstantiateC1 t a) (eInstantiateC1 t b)
+eInstantiateC1 t (Concat l) = Concat (map (eInstantiateC1 t) l)
 eInstantiateC1 a (For t i o) = For (instantiate1 a t) (eInstantiateC1 a i) (hoistScope (eInstantiateC1 a) o)
 eInstantiateC1 a (If c t e) = If (eInstantiateC1 a c) (eInstantiateC1 a t) (eInstantiateC1 a e)
 eInstantiateC1 a (Record l) = Record (mapSnd (eInstantiateC1 a) l)
@@ -179,7 +179,7 @@ eAbstractC1 a (TLam k b) = TLam k (eAbstractC1 a b)
 eAbstractC1 a ((:§) e c) = (:§) (eAbstractC1 a e) (abstract1 a c)
 eAbstractC1 a (Empty c) = Empty (abstract1 a c)
 eAbstractC1 a (Singleton e) = Singleton (eAbstractC1 a e)
-eAbstractC1 t (Concat a b) = Concat (eAbstractC1 t a) (eAbstractC1 t b)
+eAbstractC1 t (Concat l) = Concat (map (eAbstractC1 t) l)
 eAbstractC1 a (For t i o) = For (abstract1 a t) (eAbstractC1 a i) (hoistScope (eAbstractC1 a) o)
 eAbstractC1 a (If c t e) = If (eAbstractC1 a c) (eAbstractC1 a t) (eAbstractC1 a e)
 eAbstractC1 a (Record l) = Record (mapSnd (eAbstractC1 a) l)
@@ -225,7 +225,7 @@ prettyExpr (vs, tvs) p ((:§) e c) = pparens p $
   prettyExpr (vs, tvs) (not $ isApp e) e </> T.prettyType tvs True c
 prettyExpr (_,_tvs) _ (Empty _t) = brackets empty -- (T.prettyType tvs False t)
 prettyExpr ns _ (Singleton e) = brackets (prettyExpr ns False e)
-prettyExpr ns p (Concat a b) = pparens p $ prettyExpr ns True a <+> text "++" <+> prettyExpr ns True b
+prettyExpr ns p (Concat l) = pparens p $ align (cat (punctuate (text " ++ ") (map (\e -> prettyExpr ns True e) l)))
 prettyExpr ns p (Eq _t l r) = pparens p $ prettyExpr ns True l <+> text "==" <+> prettyExpr ns True r
 prettyExpr (v:vs, tvs) p (For t i o) = pparens p $ hang 2 $
   bold (text "for") <+> (hang 3 (parens (text v <> typeAnnotation <+> text "<-" <+> prettyExpr (v:vs, tvs) False i))) P.<$> prettyExpr (vs, tvs) False (instantiate1 (Var v) o)

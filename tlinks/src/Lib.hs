@@ -18,6 +18,7 @@ import Bound.Scope.Simple
 -- import Bound.Scope
 import Common
 import Control.Exception (assert)
+import Control.Monad (replicateM)
 import Control.Monad.Morph (lift)
 import Data.Functor (void)
 import Data.List (all)
@@ -68,9 +69,9 @@ value = Fix (T.Forall T.KType (toScope (T.Arrow
                    (toScope (Proj "data" (Var (B ()))))
                    -- OpEq
                    (toScope (Eq (toScope (toScope (toScope (T.Var (B ())))))
-                             ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.Trace (T.Var (B ())))))))
+                             ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.Var (B ()))))))
                                (Proj "left" (Var (B ()))))
-                             ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.Trace (T.Var (B ())))))))
+                             ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.Var (B ()))))))
                                (Proj "right" (Var (B ()))))))
                    )))
 
@@ -86,7 +87,7 @@ unroll n (TLam k b) = TLam k (unroll n b)
 unroll n ((:§) e c) = (:§) (unroll n e) c
 unroll _ (Empty t) = Empty t
 unroll n (Singleton e) = Singleton (unroll n e)
-unroll n (Concat a b) = Concat (unroll n a) (unroll n b)
+unroll n (Concat l) = Concat (unroll n <$> l)
 unroll n (For t i o) = For t (unroll n i) (hoistScope (unroll n) o)
 unroll n (Record l) = Record (mapSnd (unroll n) l)
 unroll n (Proj l e) = Proj l (unroll n e)
@@ -122,14 +123,19 @@ one ((:§) a c) = (:§) (one a) c
 one (Table n t) = Table n t
 one (Empty t) = Empty t
 one (Singleton e) = Singleton (one e)
-one (Concat (Empty _) r) = r
-one (Concat l (Empty _)) = l
-one (Concat l r) = Concat (one l) (one r)
+one (Concat []) = error "empty Concat"
+one (Concat l) = case foldr f ([], Nothing) (map one l) of
+  ([], Just t) -> Empty t
+  ([x], _) -> x
+  (xs, _) -> Concat xs
+  where -- accumulate non-emptys, and record type of empty
+    f (Empty t) (xs, _) = (xs, Just t)
+    f x (xs, mt) = (x:xs, mt)
 one f@(For _ (Empty _) _) = Empty (elementType (typeof f))
   where elementType (T.List et) = et
         elementType _ = error "not a list type"
 one (For _ (Singleton e) o) = instantiate1 e o
-one (For it (Concat l r) o) = (For it l o) `Concat` (For it r o)
+one (For it (Concat ls) o) = Concat (map (\l -> For it l o) ls)
 one (For it (If c t e) o) = If c (For it t o) (For it e o)
 -- for (x <- for (y <- L) M) N ~> for (y <- L) (for (x <- M) N)
 -- This circumvents the safety implied by the Scope scope safety, but
@@ -161,8 +167,11 @@ one (Rmap _ _ _) = error "TODO need to normalize type (and switch to constructor
 one (Proj l (Record fs)) = case lookup l fs of
   Nothing -> error "label not found in record"
   Just e -> e
+one (Proj l (If c t e)) = If c (Proj l t) (Proj l e)
 one (Proj l e) = Proj l (one e)
 -- one (EEq _ l r) | l == r = ETrue --
+one (Eq _ Empty{} Empty{}) = Const (Bool True)
+one (Eq _ (Const l) (Const r)) = Const (Bool (l == r))
 one (Eq t l r) = Eq t (one l) (one r)
 one (Typecase c b i s l r t) = case c of
   T.Bool -> b; T.Int -> i; T.String -> s;
@@ -170,6 +179,7 @@ one (Typecase c b i s l r t) = case c of
   T.Record c' -> eInstantiateC1 c' r
   T.Trace c' -> eInstantiateC1 c' t
   _ -> Typecase (T.norm c) b i s l r t
+one (Tracecase (If c t e) l i f r oe) = If c (Tracecase t l i f r oe) (Tracecase e l i f r oe)
 one (Tracecase x l i f r oe) = case x of
   Trace tr t -> instantiate1 t (case tr of
                                    TrLit -> l; TrIf -> i; TrRow -> r
@@ -192,7 +202,7 @@ trace (If c t e) =
   ((distTRACE (toScope (Trace TrIf (Record [("cond", F <$> trace c), ("out", Var (B ()))]))) (typeof e)) :$ trace e)
 trace (Empty c) = Empty (T.App T.tracetf c)
 trace (Singleton e) = Singleton (trace e)
-trace (Concat l r) = Concat (trace l) (trace r)
+trace (Concat l) = Concat (trace <$> l)
 trace (For it ie o) =
   For (T.App T.tracetf it) (trace ie)
       (toScope (distTRACE (toScope (Trace (TrFor (T.App T.tracetf it))
@@ -207,6 +217,8 @@ trace (Table n (T.Record row)) = For (T.Record row) (Table n (T.Record row))
                                           ("column", Const (String l)),
                                           ("data", Proj l (Var (B ())))])
 trace (Eq t l r) = Trace (TrEq (T.App T.tracetf t)) (Record [("left", trace l), ("right", trace r)])
+
+
 
 {-
 -- Do I need to do if-hoisting as a separate normalization procedure
@@ -269,7 +281,7 @@ annVars (For t i o) = For t (annVars i)
                         F x -> Var (F x))))
 annVars (Empty c) = Empty c
 annVars (Singleton e) = Singleton (annVars e)
-annVars (Concat l r) = annVars l `Concat` annVars r
+annVars (Concat l) = Concat (map annVars l)
 annVars (If c t e) = If (annVars c) (annVars t) (annVars e)
 annVars e@(Var _ ::: t) = e
 annVars (Var _) = error "Variables should be annotated, is this free? Free variable handling needs thinking about and implementing."
@@ -317,7 +329,8 @@ typeof (If c t e) =
   -- assert (typeof t == typeof e) $
   typeof t
 typeof (Empty c) = T.List c
-typeof (Concat l r) =
+typeof (Concat []) = error "empty concat"
+typeof (Concat (l:_)) =
   -- assert (typeof l == typeof r) $
   typeof l
 typeof (f :$ a) = case typeof f of
@@ -356,6 +369,21 @@ typeof (Typecase x b i s l r t) = case T.norm x of
   T.Trace et -> typeof (eInstantiateC1 et t)
   T.Var _ -> error "uh, dunno"
 typeof Tracecase{} = error "tracecase"
+
+isOneNF (Const Bottom) = False
+isOneNF (Var x) = x
+isOneNF (Const _) = True
+isOneNF (Eq _ l r) = isOneNF l && isOneNF r
+isOneNF (Empty _) = True
+isOneNF (Singleton e) = isOneNF e
+isOneNF (Concat l) = all (\case Empty{} -> False; x -> isOneNF x) l
+isOneNF (Record fields) = all (isOneNF . snd) fields
+isOneNF (Proj _ r) = isOneNF r
+isOneNF (_ :$ _) = False
+isOneNF (_ :§ _) = False
+isOneNF (For _ Table{} o) = isOneNF $ instantiate1 (Var True) o
+-- we kind of want to check that the condition's truth value is not statically known and that the branches are not equivalent, but that's not even implemented in normalization yet...
+isOneNF (If c t e) = isOneNF c && isOneNF t && isOneNF e
 
 putE :: Expr Type String String -> IO ()
 putE e = do
@@ -425,7 +453,7 @@ genTypedExpr env ty = Gen.sized $ \size ->
     -- If there is a variable we could use, we should often use it
     base = map (1,) genBase ++ map (100,) (boundVars env ty)
     -- Use type-specific generators (genRec) more often than polymorphic generators (if, proj,..)
-    recu = map (1,) [ genIf env ty, genProj env ty ] ++ map (2,) genRec
+    recu = map (1,) [ genIf env ty, genProj env ty ] ++ map (5,) genRec
 
     genBase = case ty of
       T.Bool -> [ pure true, pure false ]
@@ -455,7 +483,9 @@ genTypedExpr env ty = Gen.sized $ \size ->
       T.String -> []
       (T.List et) ->
         [ genTypedExpr env et >>= pure . Singleton
-        , Gen.subtermM2 (genTypedExpr env ty) (genTypedExpr env ty) (\l r -> pure (Concat l r))
+        , do n <- Gen.int (Range.exponential 2 1000)
+             subterms <- replicateM n (genTypedExpr env ty)
+             pure (Concat subterms)
         , genFor env et ]
       (T.Record _) -> []
 
@@ -487,6 +517,16 @@ prop_trace_type = property $ do
   normt <- eval (T.norm (T.App T.tracetf t))
   tretype === normt
 
+prop_norm_onenf :: Property
+prop_norm_onenf = property $ do
+  t <- forAll $ T.genType
+  e :: Expr Type String String <- forAll $ genTypedExpr [] t
+  e' <- eval $ (!! 400) . iterate one $ unroll 20 (value :§ (T.App T.tracetf t) :$ trace (annVars e))
+  -- Show-ing unrolled terms >~5 takes too much memory...
+  -- Fortunately, it's all lazy and we want to see a prefix anyway!
+  -- footnote (take 10000 (show e'))
+  H.assert (isOneNF (const True <$> e'))
+
 -- prop_trace_value_type :: Property
 -- prop_trace_value_type = property $ do
   -- t <- forAll $ T.genType
@@ -501,21 +541,22 @@ tests =
   [ ("genTypedExpr generates well-typed terms", prop_genTypedExpr_typeof)
   , ("one preserves types across iterations", prop_norm_preserve)
   , ("traced terms have TRACE type after some normalization", prop_trace_type)
+  , ("norm . value . trace is in oneNF", prop_norm_onenf)
   -- , ("`value` of traced terms has same type", prop_trace_value_type)
   ]
 
 someFunc :: IO ()
 someFunc = do
-
+  {-
   showTraced $ Empty T.Bool
   showTraced $ Singleton true
   showTraced $ Singleton (Singleton true)
-  showTraced $ Concat (Empty T.Bool) (Singleton true)
+  showTraced $ Concat [Empty T.Bool, Singleton true]
   showTraced $ If true false true
   showTraced $ If true (If false (string "then then") (string "then else"))
                        (If true (string "else then") (string "else else"))
-  showTraced $ Concat (If true (Singleton true) (Empty T.Bool)) (Singleton false)
-  showTraced $ If true (Concat (Singleton true) (Singleton false)) (Empty T.Bool)
+  showTraced $ Concat [If true (Singleton true) (Empty T.Bool), Singleton false]
+  showTraced $ If true (Concat [Singleton true, Singleton false]) (Empty T.Bool)
 
   showTraced $ for "x" T.Bool (Singleton true) (Singleton true)
   showTraced $ for "x" (T.List T.Bool) (Singleton (Singleton true)) (If true ((Var "x") ::: (T.List T.Bool)) (Singleton false))
@@ -533,15 +574,30 @@ someFunc = do
 
   let bsFromTable = for "x" crab tableABs (Singleton (Proj "b" (Var "x" ::: crab)))
   showTraced $ for "y" T.Bool bsFromTable $ If (Var "y" ::: T.Bool) (Singleton (int 1)) (Empty T.Int)
+  -}
 
+  -- let fl = Eq T.Bool true true
+  -- putE fl
+  -- putE (trace fl)
+  -- let vfl = value :§ T.Trace T.Bool :$ trace fl
+  -- putE $ (!! 10) . iterate one $ unroll 2 $ vfl
+  
   -- putStrLn "------ random term -------"
   -- ty <- Gen.sample T.genType
   -- putC ty
-  -- ex <- Gen.sample (genTypedExpr [] ty)
+  -- ex <- Gen.sample (genTypedExpr [] (T.List ty))
   -- putE ex
+  -- n <- Gen.sample (Gen.small (Gen.int (Range.exponential 2 1000)))
+  -- putStrLn (show n)
+
+  -- putE (Concat (map (Singleton . int) [1 .. 5]))
   -- let n = (!! 100) . iterate one $ ex
   -- putE $ n
   -- putC (typeof ex)
   -- putC (typeof n)
 
+  -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
+  -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf
+  -- recheck (Size 25) (Seed 6220584399433914846 (-6790911531265473973)) prop_norm_onenf
+  -- recheck (Size 57) (Seed 3580701760170488301 (-3044242196768731585)) prop_norm_onenf
   void tests
