@@ -15,7 +15,7 @@ module Lib where
 
 import Bound (Var(B,F))
 import Bound.Scope.Simple
--- import Bound.Scope
+import qualified Bound.Scope as BS
 import Common
 import Control.Exception (assert)
 import Control.Monad (replicateM, forM_)
@@ -38,9 +38,9 @@ import Text.PrettyPrint.ANSI.Leijen (putDoc)
 
 -- the value trace analysis function
 value :: Eq a => Expr Type a x
-value = Fix (T.Forall T.KType (toScope (T.Arrow
-                                      (T.Var (B ()))
-                                      (T.App T.valuetf (T.Var (B ())))))) $ toScope $ TLam T.KType $ Typecase (toScope (T.Var (B ())))
+value = Fix (T.Forall T.KType (BS.toScope (T.Arrow
+                                           (T.Var (B ()))
+                                           (T.App T.valuetf (T.Var (B ())))))) $ toScope $ TLam T.KType $ Typecase (toScope (T.Var (B ())))
         -- Bool
         (Lam (lift T.Bool) (toScope (Var (B ()))))
         -- Int
@@ -342,12 +342,12 @@ typeof (Lam a b)  = T.Arrow a (typeof (instantiate1 (Const Bottom ::: a) b))
 typeof (Fix t b) = typeof (instantiate1 (Const Bottom ::: t) b)
 typeof (TLam k b) =
   let t = typeof (eInstantiateC1 (T.Var undefined) b)
-  in T.Forall k (toScope (F <$> t))
+  in T.Forall k (lift t)
 typeof ((TLam k b) :§ t) = typeof (eInstantiateC1 t b)
  -- this is not right, should check function to T.Forall, like :$
 typeof (f :§ t) = case T.norm (typeof f) of
   T.Lam k b -> error "type lam"
-  T.Forall k b -> instantiate1 t b
+  T.Forall k b -> BS.instantiate1 t b
 typeof (Trace TrLit c) = T.Trace (typeof c)
 typeof (Trace TrIf i) = typeof (Proj "out" i)
 typeof (Trace (TrFor _) i) = typeof (Proj "out" i)

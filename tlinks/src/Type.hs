@@ -8,8 +8,7 @@ import Data.List (sort, nub, foldl', all)
 import Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 import qualified Text.PrettyPrint.ANSI.Leijen as P
 import Bound ((>>>=), Var(B,F))
-import Bound.Scope.Simple
--- import Bound.Scope
+import Bound.Scope
 import Common
 import Control.Monad (ap)
 import GHC.Exts (sortWith)
@@ -151,6 +150,7 @@ norm Int = Int
 norm String = String
 norm (Var v) = Var v
 norm (Lam k b) = Lam k b -- can't normalize under binder, because .. why?
+norm (Forall k b) = Forall k b -- same
 norm (App f a) = case norm f of
   (Lam _ b) -> norm $ instantiate1 a b
   e -> error $ "trying to apply non-type function "
@@ -158,7 +158,6 @@ norm (List c) = List (norm c)
 norm (Trace c) = Trace (norm c)
 norm (Record c) = Record (norm c)
 norm (Arrow a b) = Arrow (norm a) (norm b)
-norm (Forall k b) = Forall k (hoistScope norm b)
 norm RowNil = RowNil
 norm (RowCons l c r) = RowCons l (norm c) (norm r)
 norm (Typerec x b i s l r t) = norm $ case norm x of
