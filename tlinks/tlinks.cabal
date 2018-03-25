@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: bb6f2c5e992d404686d40d08138c96c8f45774374f18417d37f148779e127bdc
+-- hash: 40b251c876f8c15ec0db6a7ceaf18fc914c228ea8ff9f8581f57cfa73b168598
 
 name:           tlinks
 version:        0.1.0.0
@@ -30,6 +30,7 @@ library
       Common
       Expr
       Lib
+      Shredding
       Type
   other-modules:
       Paths_tlinks
@@ -42,6 +43,7 @@ library
     , deriving-compat
     , hedgehog
     , mmorph
+    , mtl
   default-language: Haskell2010
 
 executable tlinks-exe
@@ -58,6 +60,7 @@ executable tlinks-exe
     , deriving-compat
     , hedgehog
     , mmorph
+    , mtl
     , tlinks
   default-language: Haskell2010
 
@@ -76,5 +79,6 @@ test-suite tlinks-test
     , deriving-compat
     , hedgehog
     , mmorph
+    , mtl
     , tlinks
   default-language: Haskell2010
