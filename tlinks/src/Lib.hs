@@ -49,8 +49,7 @@ value = Fix (T.Forall T.KType (toScope (T.Arrow
         (Lam (lift T.String) (toScope (Var (B ()))))
         -- Concat
         (Lam (lift (toScope (T.List (T.Var (B ())))))
-          (toScope (For (toScope (toScope (T.Var (B ()))))
-                     (Var (B ()))
+          (toScope (For (Var (B ()))
                      (toScope (Singleton ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (T.Var (B ()))))) (Var (B ()))))))))
         -- Record
         (Lam (toScope (toScope (T.Record (T.Var (B ())))))
@@ -89,7 +88,7 @@ unroll n ((:§) e c) = (:§) (unroll n e) c
 unroll _ (Empty t) = Empty t
 unroll n (Singleton e) = Singleton (unroll n e)
 unroll n (Concat l) = Concat (unroll n <$> l)
-unroll n (For t i o) = For t (unroll n i) (hoistScope (unroll n) o)
+unroll n (For i o) = For (unroll n i) (hoistScope (unroll n) o)
 unroll n (Record l) = Record (mapSnd (unroll n) l)
 unroll n (Proj l e) = Proj l (unroll n e)
 unroll _ (Table name t) = Table name t
@@ -132,12 +131,12 @@ one (Concat l) = case foldr f ([], Nothing) (map one l) of
   where -- accumulate non-emptys, and record type of empty
     f (Empty t) (xs, _) = (xs, Just t)
     f x (xs, mt) = (x:xs, mt)
-one f@(For _ (Empty _) _) = Empty (elementType (typeof f))
+one f@(For (Empty _) _) = Empty (elementType (typeof f))
   where elementType (T.List et) = et
         elementType _ = error "not a list type"
-one (For _ (Singleton e) o) = instantiate1 e o
-one (For it (Concat ls) o) = Concat (map (\l -> For it l o) ls)
-one (For it (If c t e) o) = If c (For it t o) (For it e o)
+one (For (Singleton e) o) = instantiate1 e o
+one (For (Concat ls) o) = Concat (map (\l -> For l o) ls)
+one (For (If c t e) o) = If c (For t o) (For e o)
 -- for (x <- for (y <- L) M) N ~> for (y <- L) (for (x <- M) N)
 -- This circumvents the safety implied by the Scope scope safety, but
 -- should be correct. Variables in L stay unchanged. y is visible in
@@ -147,19 +146,19 @@ one (For it (If c t e) o) = If c (For it t o) (For it e o)
 -- x is visible in N, bound by the outer for, so that stays the same.
 -- On the right side, y is visible in N, but not used. However, all
 -- other free variables need to move up one binder to account for y.
-one (For xt (For yt l (Scope m)) n) =
-  For yt l (Scope (For xt m (F <$> n)))
+one (For (For l (Scope m)) n) =
+  For l (Scope (For m (F <$> n)))
 -- no, no, need proper elim frames
 -- one (EFor t (EVar x) o) = EFor t (EVar x) (hoistScope one o) -- for debugging only
 
 -- without eta expansion of tables:
-one (For t (Table n tt) o) = For t (Table n tt) (hoistScope one o)
+one (For (Table n tt) o) = For (Table n tt) (hoistScope one o)
 -- -- with eta expansion of tables:
 -- one (For t (Table n tt@(TT (CRecord row))) o) = For t (Table n tt) etaO --(hoistScope one o)
   -- where
     -- etaO :: Scope () (Expr Type a) x
     -- etaO = Scope (splat (pure . F) (const (ERecord (map (\(l, _) -> (l, EProj l tt (EVar (B ())))) (rowToList row)))) o)
-one (For t i o) = For t (one i) o --(hoistScope one o)
+one (For i o) = For (one i) o --(hoistScope one o)
 one (Record fs) = Record (mapSnd one fs)
 one (Rmap f (T.Record row) r) = Record
   (map (\(l,t) -> (l, f :§ t :$ Proj l r))
@@ -204,15 +203,16 @@ trace (If c t e) =
 trace (Empty c) = Empty (T.App T.tracetf c)
 trace (Singleton e) = Singleton (trace e)
 trace (Concat l) = Concat (trace <$> l)
-trace (For it ie o) =
-  For (T.App T.tracetf it) (trace ie)
+trace (For ie o) =
+  let (T.List it) = T.norm (typeof ie) in
+  For (trace ie)
       (toScope (distTRACE (toScope (Trace (TrFor (T.App T.tracetf it))
                                     (Record [("in", Var (F (B ()))), ("out", Var (B ()))])))
                  (typeof (instantiate1 (Const Bottom ::: it) o))
                  :$ trace (fromScope o)))
 trace (Record fields) = Record (second trace <$> fields)
 trace (Proj l r) = Proj l (trace r)
-trace (Table n (T.Record row)) = For (T.Record row) (Table n (T.Record row))
+trace (Table n (T.Record row)) = For (Table n (T.Record row))
   (toScope (Singleton (Record (map (\(l,_) -> (l, tblTrace l)) (T.rowToList row)))))
   where tblTrace l = Trace TrRow (Record [("table", Const (String n)),
                                           ("column", Const (String l)),
@@ -276,10 +276,11 @@ data Query x
 -- | Annotate bound variables with the types recorded in their binders
 annVars :: Eq a => Expr Type a x -> Expr Type a x
 annVars (Const c) = Const c
-annVars (For t i o) = For t (annVars i)
-  (toScope (annVars (fromScope o >>= \case
-                        B () -> Var (B ()) ::: t
-                        F x -> Var (F x))))
+annVars (For i o) =
+  let T.List t = T.norm (typeof i) in
+    For (annVars i) (toScope (annVars (fromScope o >>= \case
+                                          B () -> Var (B ()) ::: t
+                                          F x -> Var (F x))))
 annVars (Empty c) = Empty c
 annVars (Singleton e) = Singleton (annVars e)
 annVars (Concat l) = Concat (map annVars l)
@@ -299,7 +300,7 @@ dist :: forall a x. Scope () (Expr Type a) x -> Type a -> Expr Type a x
 -- dist k T.Bool = Lam T.Bool k -- these shouldn't happen, right?
 -- dist k T.Int = Lam T.Int k
 -- dist k T.String = Lam T.String k
-dist k (T.List t) = Lam (T.List t) (toScope (For t (Var (B ())) (toScope (Singleton ((F . F <$> dist k t) :$ (Var (B ())))))))
+dist k (T.List t) = Lam (T.List t) (toScope (For (Var (B ())) (toScope (Singleton ((F . F <$> dist k t) :$ (Var (B ())))))))
 dist k (T.Record row) = Lam (T.Record row) (toScope (Record (map field (T.rowToList row))))
   where
     field :: (Label, Type a) -> (Label, Expr Type a (Var () x))
@@ -307,8 +308,8 @@ dist k (T.Record row) = Lam (T.Record row) (toScope (Record (map field (T.rowToL
 dist k (T.Trace t) = Lam (T.Trace t) k
 
 -- Ugh. I might need an actual typechecker...
-typeof :: HasCallStack => Show x => Eq a => Expr Type a x -> Type a
-typeof (Var x) = error $ "unannotated var " ++ show x
+typeof :: HasCallStack => Eq a => Expr Type a x -> Type a
+typeof (Var x) = error $ "unannotated var "
 typeof (Const Bottom) = error "bottom"
 typeof (Const (Bool _)) = T.Bool
 typeof (Const (Int _)) = T.Int
@@ -352,8 +353,8 @@ typeof (Trace TrIf i) = typeof (Proj "out" i)
 typeof (Trace (TrFor _) i) = typeof (Proj "out" i)
 typeof (Trace TrRow r) = T.Trace (typeof (Proj "data" r))
 typeof (Trace (TrEq _) r) = T.Trace T.Bool
-typeof (For t i o) =
-  -- assert (typeof i == T.List t) $
+typeof (For i o) =
+  let T.List t = T.norm (typeof i) in
   typeof (instantiate1 (Const Bottom ::: t) o)
 typeof (Table _ (T.Record row)) =
   assert (all (T.isBaseType . snd) (T.rowToList row)) $
@@ -382,7 +383,7 @@ isOneNF (Record fields) = all (isOneNF . snd) fields
 isOneNF (Proj _ r) = isOneNF r
 isOneNF (_ :$ _) = False
 isOneNF (_ :§ _) = False
-isOneNF (For _ Table{} o) = isOneNF $ instantiate1 (Var True) o
+isOneNF (For Table{} o) = isOneNF $ instantiate1 (Var True) o
 -- we kind of want to check that the condition's truth value is not statically known and that the branches are not equivalent, but that's not even implemented in normalization yet...
 isOneNF (If c t e) = isOneNF c && isOneNF t && isOneNF e
 
@@ -424,10 +425,10 @@ genIf env ty = do
 
 genFor :: Eq a => Show x => Show a => [(x, Type a)] -> Type a -> Gen (Expr Type a x)
 genFor env et = do
-  it <- T.genType
-  ie <- genTypedExpr env (T.List it)
-  oe <- genTypedExpr ((B (), it):(first F <$> env)) (T.List et)
-  pure (For it ie (toScope oe))
+  t <- T.genType
+  ie <- genTypedExpr env (T.List t)
+  oe <- genTypedExpr ((B (), t):(first F <$> env)) (T.List et)
+  pure (For ie (toScope oe))
 
 boundVars :: HasCallStack => Eq a => Show a => Show x =>
   [(x, Type a)] -> Type a -> [ Gen (Expr Type a x) ]

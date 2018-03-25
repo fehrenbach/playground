@@ -50,12 +50,10 @@ data Expr c a x
   | Empty (c a)
   | Singleton (Expr c a x)
   | Concat [Expr c a x]
-  -- (c a) is the type of ELEMENTS of the first Expr argument
-  | For (c a) (Expr c a x) (Scope () (Expr c a) x)
+  | For (Expr c a x) (Scope () (Expr c a) x)
   | Record [(Label, Expr c a x)]
   -- The Type is the type of the record
   | Rmap (Expr c a x) (c a) (Expr c a x)
-  -- the Type is the type of the record. I need this for tracing.
   | Proj Label (Expr c a x)
   | Table String (c a) -- type of ELEMENTS/ROWS that is, a record type, not a list type
   | Eq (c a) (Expr c a x) (Expr c a x) -- equality specialized to a type
@@ -84,7 +82,7 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   Var x >>= f = f x
   Fix t b >>= f = Fix t (b >>>= f)
   Lam t b >>= f = Lam t (b >>>= f)
-  For t e b >>= f = For t (e >>= f) (b >>>= f)
+  For e b >>= f = For (e >>= f) (b >>>= f)
   (:$) l r >>= f = (:$) (l >>= f) (r >>= f)
   TLam k b >>= f = TLam k (b >>= liftCE . f)
   (:§) e c >>= f = (:§) (e >>= f) c
@@ -109,7 +107,7 @@ liftCE (Var x) = Var x
 liftCE (e ::: t) = liftCE e ::: lift t
 liftCE (Fix t b) = Fix (lift t) (hoistScope liftCE b)
 liftCE (Lam t b) = Lam (lift t) (hoistScope liftCE b)
-liftCE (For t e b) = For (lift t) (liftCE e) (hoistScope liftCE b)
+liftCE (For e b) = For (liftCE e) (hoistScope liftCE b)
 liftCE ((:$) l r) = (:$) (liftCE l) (liftCE r)
 liftCE (TLam k b) = TLam k (liftCE b)
 liftCE ((:§) e c) = (:§) (liftCE e) (lift c)
@@ -135,8 +133,8 @@ liftCE (Trace tr e) = Trace (fmap lift tr) (liftCE e)
 lam :: Eq x => x -> c a -> Expr c a x -> Expr c a x
 lam x t b = Lam t (abstract1 x b)
 
-for :: Eq x => x -> c a -> Expr c a x -> Expr c a x -> Expr c a x
-for x t i o = For t i (abstract1 x o)
+for :: Eq x => x -> Expr c a x -> Expr c a x -> Expr c a x
+for x i o = For i (abstract1 x o)
 
 -- instantiate a constructor in an expression
 eInstantiateC1 :: Eq a => Monad c => c a -> Expr (Scope () c) a x -> Expr c a x
@@ -151,7 +149,7 @@ eInstantiateC1 a ((:§) e c) = (:§) (eInstantiateC1 a e) (instantiate1 a c)
 eInstantiateC1 a (Empty c) = Empty (instantiate1 a c)
 eInstantiateC1 a (Singleton e) = Singleton (eInstantiateC1 a e)
 eInstantiateC1 t (Concat l) = Concat (map (eInstantiateC1 t) l)
-eInstantiateC1 a (For t i o) = For (instantiate1 a t) (eInstantiateC1 a i) (hoistScope (eInstantiateC1 a) o)
+eInstantiateC1 a (For i o) = For (eInstantiateC1 a i) (hoistScope (eInstantiateC1 a) o)
 eInstantiateC1 a (If c t e) = If (eInstantiateC1 a c) (eInstantiateC1 a t) (eInstantiateC1 a e)
 eInstantiateC1 a (Record l) = Record (mapSnd (eInstantiateC1 a) l)
 eInstantiateC1 a (Rmap x t y) = Rmap (eInstantiateC1 a x) (instantiate1 a t) (eInstantiateC1 a y)
@@ -180,7 +178,7 @@ eAbstractC1 a ((:§) e c) = (:§) (eAbstractC1 a e) (abstract1 a c)
 eAbstractC1 a (Empty c) = Empty (abstract1 a c)
 eAbstractC1 a (Singleton e) = Singleton (eAbstractC1 a e)
 eAbstractC1 t (Concat l) = Concat (map (eAbstractC1 t) l)
-eAbstractC1 a (For t i o) = For (abstract1 a t) (eAbstractC1 a i) (hoistScope (eAbstractC1 a) o)
+eAbstractC1 a (For i o) = For (eAbstractC1 a i) (hoistScope (eAbstractC1 a) o)
 eAbstractC1 a (If c t e) = If (eAbstractC1 a c) (eAbstractC1 a t) (eAbstractC1 a e)
 eAbstractC1 a (Record l) = Record (mapSnd (eAbstractC1 a) l)
 eAbstractC1 a (Rmap f t r) = Rmap (eAbstractC1 a f) (abstract1 a t) (eAbstractC1 a r)
@@ -227,9 +225,8 @@ prettyExpr (_,_tvs) _ (Empty _t) = brackets empty -- (T.prettyType tvs False t)
 prettyExpr ns _ (Singleton e) = brackets (prettyExpr ns False e)
 prettyExpr ns p (Concat l) = pparens p $ align (cat (punctuate (text " ++ ") (map (\e -> prettyExpr ns True e) l)))
 prettyExpr ns p (Eq _t l r) = pparens p $ prettyExpr ns True l <+> text "==" <+> prettyExpr ns True r
-prettyExpr (v:vs, tvs) p (For t i o) = pparens p $ hang 2 $
-  bold (text "for") <+> (hang 3 (parens (text v <> typeAnnotation <+> text "<-" <+> prettyExpr (v:vs, tvs) False i))) P.<$> prettyExpr (vs, tvs) False (instantiate1 (Var v) o)
-  where typeAnnotation = char ':' <+> T.prettyType tvs False t
+prettyExpr (v:vs, tvs) p (For i o) = pparens p $ hang 2 $
+  bold (text "for") <+> (hang 3 (parens (text v <+> text "<-" <+> prettyExpr (v:vs, tvs) False i))) P.<$> prettyExpr (vs, tvs) False (instantiate1 (Var v) o)
 prettyExpr _ _ (Record []) = braces empty
 prettyExpr ns _ (Record l) = group $ braces $ align (cat (punctuate (comma <> space) (map (\(lbl, e) -> blue (text lbl) <+> char '=' <+> prettyExpr ns False e) l)))
 prettyExpr ns p (If c t e) = pparens p $ group $ align $
