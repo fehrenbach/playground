@@ -43,6 +43,7 @@ data Type a
   | RowCons Label (Type a) (Type a)
   | Typerec (Type a) (Type a) (Type a) (Type a) (Type a) (Type a) (Type a)
   | RowMap (Type a) (Type a)
+  | Index -- TODO
   deriving (Functor)
 
 deriveEq1 ''Type
@@ -103,6 +104,7 @@ prettyType avs p (Typerec x b i s l r t) = pparens p $ bold (text "Typerec") <+>
   tupled (map (prettyType avs False) [b, i, s, l, r, t])
 prettyType avs p (Arrow a b) = pparens p $ prettyType avs True a <+> text "->" <+> prettyType avs True b
 prettyType (av:avs) p (Forall k t) = pparens p $ bold (char '∀') <> text av <> char '.' <> prettyType avs False (instantiate1 (Var av) t)
+prettyType _ p Index = pparens p $ text "Index"
 
 prettyRow :: [String] -> Type String -> Doc
 prettyRow _ RowNil = empty
@@ -128,6 +130,13 @@ valuetf = Lam KType $ toScope $ Typerec (Var (B ()))
   (Lam KType (toScope (Lam KType (toScope (List (Var (B ())))))))
   (Lam KRow (toScope (Lam KRow (toScope (Record (Var (B ())))))))
   (Lam KType (toScope (Lam KType (toScope (Var (B ()))))))
+
+record :: [(Label, Type a)] -> Type a
+record = Record . listToRow
+
+listToRow :: [(Label, Type a)] -> Type a
+listToRow [] = RowNil
+listToRow ((l,t):r) = RowCons l t (listToRow r)
 
 rowToList :: Type a -> [(Label, Type a)]
 rowToList = sortWith fst . rowToList'

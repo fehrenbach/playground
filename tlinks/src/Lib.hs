@@ -18,7 +18,7 @@ import Bound.Scope.Simple
 -- import Bound.Scope
 import Common
 import Control.Exception (assert)
-import Control.Monad (replicateM)
+import Control.Monad (replicateM, forM_)
 import Control.Monad.Morph (lift)
 import Data.Functor (void)
 import Data.List (all)
@@ -27,6 +27,7 @@ import qualified Debug.Trace as Debug
 import GHC.Stack (HasCallStack)
 import Expr
 import Type (Type, Kind)
+import qualified Shredding as S
 import qualified Type as T
 import qualified Hedgehog as H
 import           Hedgehog hiding (Var, assert)
@@ -595,6 +596,12 @@ someFunc = do
   -- putE $ n
   -- putC (typeof ex)
   -- putC (typeof n)
+
+  let resultType = T.List (T.record [("department", T.String)
+                                    ,("people", T.List (T.record [("name", T.String)
+                                                                 ,("tasks", T.List T.String)]))])
+  putStrLn (show (S.paths resultType))
+  forM_ (S.paths resultType) (\p -> putC (S.outerShredding p resultType))
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
   -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf
