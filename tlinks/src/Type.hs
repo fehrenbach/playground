@@ -130,6 +130,17 @@ valuetf = Lam KType $ toScope $ Typerec (Var (B ()))
   (Lam KRow (toScope (Lam KRow (toScope (Record (Var (B ())))))))
   (Lam KType (toScope (Lam KType (toScope (Var (B ()))))))
 
+-- the WHERE type function
+wheretf :: Type a
+wheretf = Lam KType $ toScope $ Typerec (Var (B ()))
+  (w Bool)
+  (w Int)
+  (w String)
+  (Lam KType (toScope (Lam KType (toScope (List (Var (F (B ()))))))))
+  (Lam KRow (toScope (Lam KRow (toScope (Record (Var (F (B ()))))))))
+  (Lam KType (toScope (Lam KType (toScope (Var (F (B ()))))))) -- not  sure about this one
+  where w t = record [("data", t), ("table", String), ("column", String), ("row", Int)]
+
 record :: [(Label, Type a)] -> Type a
 record = Record . listToRow
 

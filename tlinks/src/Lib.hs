@@ -35,7 +35,6 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Text.PrettyPrint.ANSI.Leijen (putDoc)
 
-
 -- the value trace analysis function
 value :: Eq a => Expr Type a x
 value = Fix (T.Forall T.KType (BS.toScope (T.Arrow
@@ -47,7 +46,7 @@ value = Fix (T.Forall T.KType (BS.toScope (T.Arrow
         (Lam (lift T.Int) (toScope (Var (B ()))))
         -- String
         (Lam (lift T.String) (toScope (Var (B ()))))
-        -- Concat
+        -- List
         (Lam (lift (toScope (T.List (T.Var (B ())))))
           (toScope (For (Var (B ()))
                      (toScope (Singleton ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (T.Var (B ()))))) (Var (B ()))))))))
@@ -74,6 +73,37 @@ value = Fix (T.Forall T.KType (BS.toScope (T.Arrow
                              ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.Var (B ()))))))
                                (Proj "right" (Var (B ()))))))
                    )))
+
+wherep :: Eq a => Expr Type a x
+wherep = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.Var (B ())) (T.App T.wheretf (T.Var (B ())))))) $ toScope $ TLam T.KType $ Typecase (toScope (T.Var (B ())))
+  -- Bool
+  (Lam (lift T.Bool) (toScope (Record [("data", Var (B ())), ("table", string "facts"), ("column", string "alternative"), ("row", int (-1))])))
+  -- Int
+  (Lam (lift T.Int) (toScope (Record [("data", Var (B ())), ("table", string "facts"), ("column", string "alternative"), ("row", int (-1))])))
+  -- String
+  (Lam (lift T.String) (toScope (Record [("data", Var (B ())), ("table", string "facts"), ("column", string "alternative"), ("row", int (-1))])))
+  -- List
+  (Lam (lift (toScope (T.List (T.Var (B ()))))) 
+   (toScope (For (Var (B ())) (toScope (Singleton (Var (F (F (B ()))) :§ toScope (toScope (T.Var (B ()))) :$ Var (B ())))))))
+  -- Record
+  (Lam (toScope (toScope (T.Record (T.Var (B ())))))
+    (toScope (Rmap (Var (F (B ()))) (toScope (toScope (T.Record (T.Var (B ()))))) (Var (B ())))))
+  -- Trace
+  (Lam (toScope (toScope (T.Trace (T.Var (B ())))))
+    (toScope (Tracecase (Var (B ()))
+               -- Lit
+               (toScope (Record [("data", Var (B ())), ("table", string "facts"), ("column", string "alternative"), ("row", int (-1))]))
+               -- If
+               (toScope (Var (F (F (B ()))) :§ toScope (toScope (T.Trace (T.Var (B ())))) :$ Proj "out" (Var (B ()))))
+               -- For
+               (toScope (Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (F (B ())))))) :$ Proj "out" (Var (B ()))))
+               -- Row
+               (toScope (Var (B ())))
+               -- OpEq
+               (toScope (Record [ ("data", Eq (toScope (toScope (toScope (T.Var (B ())))))
+                                           (liftCE (liftCE (liftCE value)) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ (Proj "left" (Var (B ()))))
+                                           (liftCE (liftCE (liftCE value)) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ (Proj "right" (Var (B ())))))
+                                , ("table", string "facts"), ("column", string "alternative"), ("row", int (-1))])))))
 
 unroll :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
 unroll 0 (Fix _ _) = Const Bottom
@@ -603,6 +633,8 @@ someFunc = do
                                                                  ,("tasks", T.List T.String)]))])
   putStrLn (show (S.paths resultType))
   forM_ (S.paths resultType) (\p -> putC (S.outerShredding p resultType))
+
+  putE $ wherep
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
   -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf
