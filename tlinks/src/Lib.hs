@@ -635,6 +635,31 @@ someFunc = do
   forM_ (S.paths resultType) (\p -> putC (S.outerShredding p resultType))
 
   putE $ wherep
+  let agenciesRecordType = (T.record [("based_in", T.String)
+                                            ,("name", T.String)
+                                            ,("phone", T.String)])
+  let agencies = Table "agencies" agenciesRecordType
+
+  let externalToursRecordType = (T.record [("destination", T.String)
+                                          ,("name", T.String)
+                                          ,("price", T.Int)
+                                          ,("type", T.String)])
+  let externalTours = Table "externalTours" externalToursRecordType
+  let q1rt = T.record [("name", T.String)
+                      ,("phone", T.String)]
+  let q1 = for "a" agencies $
+           for "e" externalTours $
+           If (Eq T.String (Proj "name" (Var "a" ::: agenciesRecordType)) (Proj "name" (Var "e" ::: externalToursRecordType))) -- TODO && e.type == "boat"
+             (Singleton (Record [("name", Proj "name" (Var "e" ::: externalToursRecordType))
+                                ,("phone", Proj "phone" (Var "a" ::: agenciesRecordType))]))
+             (Empty q1rt)
+  putE $ q1
+  let tq1 = (!! 145) . iterate one $ unroll 3 $ trace q1
+  putE tq1
+  let vtq1 = (!! 145) . iterate one $ unroll 6 $ (value :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
+  putE vtq1
+  let wtq1 = (!! 145) . iterate one $ unroll 6 $ (wherep :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
+  putE wtq1
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
   -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf
