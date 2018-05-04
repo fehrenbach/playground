@@ -105,6 +105,38 @@ wherep = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.Var (B ())) (T.App T.wher
                                            (liftCE (liftCE (liftCE value)) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ (Proj "right" (Var (B ())))))
                                 , ("table", string "facts"), ("column", string "alternative"), ("row", int (-1))])))))
 
+linnotation :: Eq a => Expr Type a x
+linnotation = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.lineagetf (T.Var (B ())))
+                                                  (T.List (T.record [("table", T.String), ("row", T.Int)]))))) $ toScope $ TLam T.KType $ Typecase (toScope (T.Var (B ())))
+              (Lam (lift T.Bool) (toScope (Empty (lift (T.record [("table", T.String), ("row", T.Int)])))))
+              (Lam (lift T.Int) (toScope (Empty (lift (T.record [("table", T.String), ("row", T.Int)])))))
+              (Lam (lift T.String) (toScope (Empty (lift (T.record [("table", T.String), ("row", T.Int)])))))
+              (Lam (lift (toScope (T.List (T.Var (B ())))))
+               (toScope (For (Var (B ()))
+                          (toScope (Var (F (F (B ()))) :§ (toScope . toScope) (T.Var (B ())) :$ Var (B ()))))))
+              (Lam (lift (toScope (T.Record (T.Var (B ())))))
+               (toScope (Rfold
+                         (TLam T.KType (Lam (lift (lift (lift (T.List (T.record [("table", T.String), ("row", T.Int)])))))
+                                         (toScope (Lam (toScope (toScope (toScope (T.Var (B ())))))
+                                                    (toScope (Concat [ Var (F (B ()))
+                                                                     , Var (F (F (F (B ())))) :§ toScope (toScope (toScope (T.Var (B ())))) :$ Var (B ()) ]))))))
+                         (Empty (lift (lift (T.record [("table", T.String), ("row", T.Int)]))))
+                         (Var (B ()))
+                         (toScope (toScope (T.Record (T.Var (B ()))))))))
+              (Lam (toScope (toScope (T.Trace (T.Var (B ())))))
+               (toScope (Tracecase (Var (B ()))
+                         (toScope (Empty ((lift . lift) (T.record [("table", T.String), ("row", T.Int)]))))
+                         -- this is without the annotations from .cond
+                         (toScope (Var (F (F (B ()))) :§ toScope (toScope (T.Trace (T.Var (B ())))) :$ Proj "out" (Var (B ()))))
+                         (toScope
+                           (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (B ()))))) :$ Proj "in" (Var (B ()))
+                                   , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (F (B ())))))) :$ Proj "out" (Var (B ()))]))
+                         (toScope (Record [ ("table", Proj "table" (Var (B ())))
+                                          , ("row", Proj "row" (Var (B ())))]))
+                         (toScope
+                           (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (B ()))))) :$ Proj "left" (Var (B ()))
+                                   , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (B ()))))) :$ Proj "right" (Var (B ()))])))))
+
 unroll :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
 unroll 0 (Fix _ _) = Const Bottom
 unroll n (Fix t b) = unroll (n-1) (instantiate1 (Fix t b) b)
@@ -660,6 +692,8 @@ someFunc = do
   putE vtq1
   let wtq1 = (!! 145) . iterate one $ unroll 6 $ (wherep :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
   putE wtq1
+
+  putE linnotation
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
   -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf

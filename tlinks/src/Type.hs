@@ -141,6 +141,16 @@ wheretf = Lam KType $ toScope $ Typerec (Var (B ()))
   (Lam KType (toScope (Lam KType (toScope (Var (F (B ()))))))) -- not  sure about this one
   where w t = record [("data", t), ("table", String), ("column", String), ("row", Int)]
 
+-- the LINEAGE type function
+lineagetf :: Type a
+lineagetf = Lam KType $ toScope $ Typerec (Var (B ()))
+  Bool Int String
+  (Lam KType (toScope (Lam KType (toScope (List (l (Var (B ()))))))))
+  (Lam KRow (toScope (Lam KRow (toScope (Record (Var (B ())))))))
+  (Lam KType (toScope (Lam KType (toScope (Var (B ()))))))
+  where l a = record [("data", a),
+                      ("lineage", List (record [("table", String), ("row", Int)]))]
+
 record :: [(Label, Type a)] -> Type a
 record = Record . listToRow
 

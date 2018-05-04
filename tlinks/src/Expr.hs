@@ -54,6 +54,7 @@ data Expr c a x
   | Record [(Label, Expr c a x)]
   -- The Type is the type of the record
   | Rmap (Expr c a x) (c a) (Expr c a x)
+  | Rfold (Expr c a x) (Expr c a x) (Expr c a x) (c a) -- function, init, record, record's type
   | Proj Label (Expr c a x)
   | Table String (c a) -- type of ELEMENTS/ROWS that is, a record type, not a list type
   | Eq (c a) (Expr c a x) (Expr c a x) -- equality specialized to a type
@@ -91,6 +92,7 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   Concat l >>= f = Concat (map (>>= f) l)
   Record le >>= f = Record (map (\(l, x) -> (l, x >>= f)) le)
   Rmap a t b >>= f = Rmap (a >>= f) t (b >>= f)
+  Rfold l m n d >>= f = Rfold (l >>= f) (m >>= f) (n >>= f) d
   If i t e >>= f = If (i >>= f) (t >>= f) (e >>= f)
   Proj l e >>= f = Proj l (e >>= f)
   Table n t >>= _ = Table n t
@@ -153,6 +155,7 @@ eInstantiateC1 a (For i o) = For (eInstantiateC1 a i) (hoistScope (eInstantiateC
 eInstantiateC1 a (If c t e) = If (eInstantiateC1 a c) (eInstantiateC1 a t) (eInstantiateC1 a e)
 eInstantiateC1 a (Record l) = Record (mapSnd (eInstantiateC1 a) l)
 eInstantiateC1 a (Rmap x t y) = Rmap (eInstantiateC1 a x) (instantiate1 a t) (eInstantiateC1 a y)
+eInstantiateC1 a (Rfold l m n d) = Rfold (eInstantiateC1 a l) (eInstantiateC1 a m) (eInstantiateC1 a n) (instantiate1 a d)
 eInstantiateC1 a (Proj l e) = Proj l (eInstantiateC1 a e)
 eInstantiateC1 a (Table n t) = Table n (instantiate1 a t)
 eInstantiateC1 a (Eq t l r) = Eq (instantiate1 a t) (eInstantiateC1 a l) (eInstantiateC1 a r)
@@ -248,6 +251,8 @@ prettyExpr (ns, tv:tvs) p (Typecase c b i s l r t) = pparens p $
     text "Trace " <> text tv <> text " => " <> prettyExpr (ns, tvs) False (eInstantiateC1 (T.Var tv) t))
 prettyExpr ns p (Rmap f _t r) = pparens p $
   bold (text "rmap") <+> prettyExpr ns True f <+> prettyExpr ns True r
+prettyExpr ns p (Rfold f a r _t) = pparens p $
+  bold (text "rfold") <+> prettyExpr ns True f <+> prettyExpr ns True a <+> prettyExpr ns True r
 prettyExpr (v:vs, tv:tvs) p (Tracecase x l i f r oe) = pparens p $
   bold (text "tracecase") <+> prettyExpr (v:vs, tv:tvs) False x <+> bold (text "of") <$$>
   (indent 2 $
