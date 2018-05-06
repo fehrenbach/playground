@@ -21,7 +21,7 @@ import Control.Exception (assert)
 import Control.Monad (replicateM, forM_)
 import Control.Monad.Morph (lift)
 import Data.Functor (void)
-import Data.List (all)
+import Data.List (all, foldl')
 import Data.Bifunctor (first, second)
 import qualified Debug.Trace as Debug
 import GHC.Stack (HasCallStack)
@@ -137,6 +137,22 @@ linnotation = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.lineagetf (T.V
                            (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (B ()))))) :$ Proj "left" (Var (B ()))
                                    , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (B ()))))) :$ Proj "right" (Var (B ()))])))))
 
+lineage :: Eq a => Expr Type a x
+lineage = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.Var (B ())) (T.App T.lineagetf (T.Var (B ())))))) $ toScope $ TLam T.KType $ Typecase (toScope (T.Var (B ())))
+  (Lam (lift T.Bool) (toScope (Var (B ()))))
+  (Lam (lift T.Int) (toScope (Var (B ()))))
+  (Lam (lift T.String) (toScope (Var (B ()))))
+  (Lam (toScope (toScope (T.List (T.Var (B ())))))
+    (toScope (For (Var (B ()))
+              (toScope (Singleton (Record
+                                   [("data", Var (F (F (B ()))) :§ toScope (toScope (T.Var (B ()))) :$ Var (B ()))
+                                   ,("lineage", liftCE (liftCE linnotation) :§ toScope (toScope (T.Var (B ()))) :$ Var (B ()))]))))))
+  (Lam (toScope (toScope (T.Record (T.Var (B ())))))
+    (toScope (Rmap (Var (F (B ()))) (toScope (toScope (T.Record (T.Var (B ()))))) (Var (B ())))))
+  (Lam (toScope (toScope (T.Trace (T.Var (B ())))))
+   (toScope (Record [("data", liftCE (liftCE value) :§ toScope (toScope (T.Trace (T.Var (B ())))) :$ Var (B ()))
+                    ,("lineage", liftCE (liftCE linnotation) :§ toScope (toScope (T.Trace (T.Var (B ())))) :$ Var (B ()))])))
+
 unroll :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
 unroll 0 (Fix _ _) = Const Bottom
 unroll n (Fix t b) = unroll (n-1) (instantiate1 (Fix t b) b)
@@ -155,6 +171,7 @@ unroll n (Record l) = Record (mapSnd (unroll n) l)
 unroll n (Proj l e) = Proj l (unroll n e)
 unroll _ (Table name t) = Table name t
 unroll n (Rmap a t b) = Rmap (unroll n a) t (unroll n b)
+unroll n (Rfold a b c t) = Rfold (unroll n a) (unroll n b) (unroll n c) t
 unroll n (Eq t l r) = Eq t (unroll n l) (unroll n r)
 unroll n (Typecase c b i s l r t) = Typecase c (unroll n b) (unroll n i) (unroll n s) (unroll n l) (unroll n r) (unroll n t)
 unroll n (Tracecase x l i f r oe) = Tracecase
@@ -222,12 +239,16 @@ one (For (Table n tt) o) = For (Table n tt) (hoistScope one o)
     -- etaO = Scope (splat (pure . F) (const (ERecord (map (\(l, _) -> (l, EProj l tt (EVar (B ())))) (rowToList row)))) o)
 one (For i o) = For (one i) o --(hoistScope one o)
 one (Record fs) = Record (mapSnd one fs)
+one (Rfold f a r (T.Record row)) =
+  foldl' (\acc (l, t) ->
+            f :§ t :$ acc :$ Proj l r
+         ) a (T.rowToList row)
 one (Rmap f (T.Record row) r) = Record
   (map (\(l,t) -> (l, f :§ t :$ Proj l r))
     (T.rowToList row))
 one (Rmap _ _ _) = error "TODO need to normalize type (and switch to constructor, not type to begin with, I think"
 one (Proj l (Record fs)) = case lookup l fs of
-  Nothing -> error "label not found in record"
+  Nothing -> error $ "label '" ++ l ++ "' not found in record"
   Just e -> e
 one (Proj l (If c t e)) = If c (Proj l t) (Proj l e)
 one (Proj l e) = Proj l (one e)
@@ -243,6 +264,7 @@ one (Typecase c b i s l r t) = case c of
   _ -> Typecase (T.norm c) b i s l r t
 one (Tracecase (If c t e) l i f r oe) = If c (Tracecase t l i f r oe) (Tracecase e l i f r oe)
 one (Tracecase x l i f r oe) = case x of
+  Record _ -> error "Record in tracecase. There's a type error somewhere"
   Trace tr t -> instantiate1 t (case tr of
                                    TrLit -> l; TrIf -> i; TrRow -> r
                                    TrFor c -> hoistScope (eInstantiateC1 c) f
@@ -278,6 +300,7 @@ trace (Table n (T.Record row)) = For (Table n (T.Record row))
   (toScope (Singleton (Record (map (\(l,_) -> (l, tblTrace l)) (T.rowToList row)))))
   where tblTrace l = Trace TrRow (Record [("table", Const (String n)),
                                           ("column", Const (String l)),
+                                          ("row", Proj "oid" (Var (B ()))),
                                           ("data", Proj l (Var (B ())))])
 trace (Eq t l r) = Trace (TrEq (T.App T.tracetf t)) (Record [("left", trace l), ("right", trace r)])
 
@@ -694,9 +717,14 @@ someFunc = do
   putE wtq1
 
   putE linnotation
+  putE lineage
+
+  let ltq1 = (!! 145) . iterate one $ unroll 4 $ (lineage :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
+  putE ltq1
+  
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
   -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf
   -- recheck (Size 25) (Seed 6220584399433914846 (-6790911531265473973)) prop_norm_onenf
   -- recheck (Size 57) (Seed 3580701760170488301 (-3044242196768731585)) prop_norm_onenf
-  void tests
+  -- void tests
