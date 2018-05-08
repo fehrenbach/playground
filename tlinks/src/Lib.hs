@@ -61,10 +61,10 @@ value = Fix (T.Forall T.KType (BS.toScope (T.Arrow
                    -- Lit
                    (toScope (Var (B ())))
                    -- If
-                   (toScope ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (T.Trace (T.Var (B ()))))))
+                   (toScope ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (T.App T.tracetf (T.Var (B ()))))))
                               (Proj "out" (Var (B ())))))
                    -- For
-                   (toScope ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.Trace (T.Var (F (B ()))))))))
+                   (toScope ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.App T.tracetf (T.Var (F (B ()))))))))
                              (Proj "out" (Var (B ())))))
                    -- Row
                    (toScope (Proj "data" (Var (B ()))))
@@ -108,7 +108,7 @@ wherep = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.Var (B ())) (T.App T.wher
                                 , ("table", string "facts"), ("column", string "alternative"), ("row", int (-1))])))))
 
 linnotation :: Eq a => Expr Type a x
-linnotation = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.lineagetf (T.Var (B ())))
+linnotation = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.tracetf (T.Var (B ())))
                                                   (T.List (T.record [("table", T.String), ("row", T.Int)]))))) $ toScope $ TLam T.KType $ Typecase (toScope (T.Var (B ())))
               (Lam (lift T.Bool) (toScope (Empty (lift (T.record [("table", T.String), ("row", T.Int)])))))
               (Lam (lift T.Int) (toScope (Empty (lift (T.record [("table", T.String), ("row", T.Int)])))))
@@ -737,7 +737,7 @@ someFunc = do
   putStrLn "lineage:"
   putE lineage
 
-  let ltq1 = (!! 145) . iterate one $ unroll 6 $ (lineage :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
+  let ltq1 = (!! 145) . iterate one $ unroll 7 $ (lineage :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
   putE ltq1
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf

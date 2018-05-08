@@ -250,10 +250,10 @@ prettyExpr (ns, tv:tvs) p (Typecase c b i s l r t) = pparens p $
     text "List " <> text tv <> text " => " <> prettyExpr (ns, tvs) False (eInstantiateC1 (T.Var tv) l) <$$>
     text "Record " <> text tv <> text " => " <> prettyExpr (ns, tvs) False (eInstantiateC1 (T.Var tv) r) <$$>
     text "Trace " <> text tv <> text " => " <> prettyExpr (ns, tvs) False (eInstantiateC1 (T.Var tv) t))
-prettyExpr ns p (Rmap f _t r) = pparens p $
-  bold (text "rmap") <+> prettyExpr ns True f <+> prettyExpr ns True r
-prettyExpr ns p (Rfold f a r _t) = pparens p $
-  bold (text "rfold") <+> prettyExpr ns True f <+> prettyExpr ns True a <+> prettyExpr ns True r
+prettyExpr ns@(_, tvs) p (Rmap f _t r) = pparens p $
+  bold (text "rmap") <+> prettyExpr ns True f <+> prettyExpr ns True r <+> T.prettyType tvs True _t
+prettyExpr ns@(_, tvs) p (Rfold f a r _t) = pparens p $
+  bold (text "rfold") <+> prettyExpr ns True f <+> prettyExpr ns True a <+> prettyExpr ns True r <+> T.prettyType tvs True _t
 prettyExpr (v:vs, tv:tvs) p (Tracecase x l i f r oe) = pparens p $
   bold (text "tracecase") <+> prettyExpr (v:vs, tv:tvs) False x <+> bold (text "of") <$$>
   (indent 2 $

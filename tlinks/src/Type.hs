@@ -81,6 +81,7 @@ prettyType [] _ _ = error "ran out of type variables during constructor pretty p
 -- TODO these might be needed for rowmap and stuff
 prettyType _ _ c | c == tracetf = text "TRACE"
 prettyType _ _ c | c == valuetf = text "VALUE"
+prettyType _ _ c | c == lineagetf = text "LINEAGE"
 prettyType _ _ RowNil = error "row outside of record"
 prettyType _ _ (RowCons _ _ _) = error "row outside of record"
 prettyType _ _ Bool = text "Bool"
