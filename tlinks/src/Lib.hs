@@ -9,6 +9,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
+
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 
 module Lib where
@@ -20,6 +21,7 @@ import Common
 import Control.Exception (assert)
 import Control.Monad (replicateM, forM_)
 import Control.Monad.Morph (lift)
+import Data.Void (Void)
 import Data.Functor (void)
 import Data.List (all, foldl')
 import Data.Bifunctor (first, second)
@@ -123,22 +125,24 @@ linnotation = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.lineagetf (T.V
                          (Empty (lift (lift (T.record [("table", T.String), ("row", T.Int)]))))
                          (Var (B ()))
                          (toScope (toScope (T.Record (T.Var (B ()))))))))
-              (Lam (toScope (toScope (T.Trace (T.Var (B ())))))
+              (Lam (toScope (toScope (T.App T.tracetf (T.Var (B ())))))
                (toScope (Tracecase (Var (B ()))
                          (toScope (Empty ((lift . lift) (T.record [("table", T.String), ("row", T.Int)]))))
                          -- this is without the annotations from .cond
-                         (toScope (Var (F (F (B ()))) :§ toScope (toScope (T.Trace (T.Var (B ())))) :$ Proj "out" (Var (B ()))))
+                         (toScope (Var (F (F (B ()))) :§ toScope (toScope (T.App T.tracetf (T.Var (B ())))) :$ Proj "out" (Var (B ()))))
                          (toScope
-                           (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (B ()))))) :$ Proj "in" (Var (B ()))
-                                   , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (F (B ())))))) :$ Proj "out" (Var (B ()))]))
+                           (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ Proj "in" (Var (B ()))
+                                   , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (F (B ())))))) :$ Proj "out" (Var (B ()))]))
+                          -- Row
                          (toScope (Record [ ("table", Proj "table" (Var (B ())))
                                           , ("row", Proj "row" (Var (B ())))]))
+                          -- Op==
                          (toScope
-                           (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (B ()))))) :$ Proj "left" (Var (B ()))
-                                   , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace (T.Var (B ()))))) :$ Proj "right" (Var (B ()))])))))
+                           (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ Proj "left" (Var (B ()))
+                                   , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ Proj "right" (Var (B ()))])))))
 
 lineage :: Eq a => Expr Type a x
-lineage = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.Var (B ())) (T.App T.lineagetf (T.Var (B ())))))) $ toScope $ TLam T.KType $ Typecase (toScope (T.Var (B ())))
+lineage = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.tracetf (T.Var (B ()))) (T.App T.lineagetf (T.Var (B ())))))) $ toScope $ TLam T.KType $ Typecase (toScope (T.Var (B ())))
   (Lam (lift T.Bool) (toScope (Var (B ()))))
   (Lam (lift T.Int) (toScope (Var (B ()))))
   (Lam (lift T.String) (toScope (Var (B ()))))
@@ -149,9 +153,9 @@ lineage = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.Var (B ())) (T.App T.lin
                                    ,("lineage", liftCE (liftCE linnotation) :§ toScope (toScope (T.Var (B ()))) :$ Var (B ()))]))))))
   (Lam (toScope (toScope (T.Record (T.Var (B ())))))
     (toScope (Rmap (Var (F (B ()))) (toScope (toScope (T.Record (T.Var (B ()))))) (Var (B ())))))
-  (Lam (toScope (toScope (T.Trace (T.Var (B ())))))
-   (toScope (Record [("data", liftCE (liftCE value) :§ toScope (toScope (T.Trace (T.Var (B ())))) :$ Var (B ()))
-                    ,("lineage", liftCE (liftCE linnotation) :§ toScope (toScope (T.Trace (T.Var (B ())))) :$ Var (B ()))])))
+  (Lam (toScope (toScope (T.App T.tracetf (T.Var (B ())))))
+   (toScope (Record [("data", liftCE (liftCE value) :§ toScope (toScope (T.App T.tracetf (T.Var (B ())))) :$ Var (B ()))
+                    ,("lineage", liftCE (liftCE linnotation) :§ toScope (toScope (T.App T.tracetf (T.Var (B ())))) :$ Var (B ()))])))
 
 unroll :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
 unroll 0 (Fix _ _) = Const Bottom
@@ -264,7 +268,7 @@ one (Typecase c b i s l r t) = case c of
   _ -> Typecase (T.norm c) b i s l r t
 one (Tracecase (If c t e) l i f r oe) = If c (Tracecase t l i f r oe) (Tracecase e l i f r oe)
 one (Tracecase x l i f r oe) = case x of
-  Record _ -> error "Record in tracecase. There's a type error somewhere"
+  -- Record _ -> error "Record in tracecase. There's a type error somewhere"
   Trace tr t -> instantiate1 t (case tr of
                                    TrLit -> l; TrIf -> i; TrRow -> r
                                    TrFor c -> hoistScope (eInstantiateC1 c) f
@@ -622,6 +626,16 @@ prop_norm_onenf = property $ do
   -- footnoteShow val
   -- typeof val === t
 
+prop_lineagetf_tracetf :: Property
+prop_lineagetf_tracetf = property $ do
+  t :: Type Void <- forAll $ T.genType
+  T.norm (T.App T.lineagetf (T.App T.tracetf t)) === T.norm (T.App T.lineagetf t)
+
+prop_tracetf_idempotent :: Property
+prop_tracetf_idempotent = property $ do
+  t :: Type Void <- forAll $ T.genType
+  T.norm (T.App T.tracetf (T.App T.tracetf t)) === T.norm (T.App T.tracetf t)
+
 tests :: IO Bool
 tests =
   checkParallel $ Group "group"
@@ -629,6 +643,8 @@ tests =
   , ("one preserves types across iterations", prop_norm_preserve)
   , ("traced terms have TRACE type after some normalization", prop_trace_type)
   , ("norm . value . trace is in oneNF", prop_norm_onenf)
+  , ("LINEAGE . TRACE = LINEAGE", prop_lineagetf_tracetf)
+  , ("TRACE idempotent", prop_tracetf_idempotent)
   -- , ("`value` of traced terms has same type", prop_trace_value_type)
   ]
 
@@ -716,15 +732,16 @@ someFunc = do
   let wtq1 = (!! 145) . iterate one $ unroll 6 $ (wherep :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
   putE wtq1
 
+  putStrLn "linnotation:"
   putE linnotation
+  putStrLn "lineage:"
   putE lineage
 
-  let ltq1 = (!! 145) . iterate one $ unroll 4 $ (lineage :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
+  let ltq1 = (!! 145) . iterate one $ unroll 6 $ (lineage :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
   putE ltq1
-  
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
   -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf
   -- recheck (Size 25) (Seed 6220584399433914846 (-6790911531265473973)) prop_norm_onenf
   -- recheck (Size 57) (Seed 3580701760170488301 (-3044242196768731585)) prop_norm_onenf
-  -- void tests
+  void tests

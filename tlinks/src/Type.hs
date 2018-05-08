@@ -120,7 +120,7 @@ tracetf = Lam KType $ toScope $ Typerec (Var (B ()))
   (Trace Bool) (Trace Int) (Trace String)
   (Lam KType (toScope (Lam KType (toScope (List (Var (B ())))))))
   (Lam KRow (toScope (Lam KRow (toScope (Record (Var (B ())))))))
-  (Lam KType (toScope (Lam KType (toScope (Trace (Var (B ())))))))
+  (Lam KType (toScope (Lam KType (toScope (Trace (Var (F (B ()))))))))
 
 -- the VALUE type function
 valuetf :: Type a
