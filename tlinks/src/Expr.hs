@@ -210,7 +210,9 @@ prettyExpr _ _ (Const (Bool b)) = text (show b)
 prettyExpr _ _ (Const (Int b)) = text (show b)
 prettyExpr _ _ (Const (String b)) = dquotes $ text b
 prettyExpr _ _ (Var x) = text x
-prettyExpr (vs, tvs) p (e ::: t) = pparens p $ prettyExpr (vs, tvs) True e <+> char ':' <+> T.prettyType tvs True t
+prettyExpr (vs, tvs) p (e ::: t) =
+  -- pparens p $ prettyExpr (vs, tvs) True e <+> char ':' <+> T.prettyType tvs True t
+  prettyExpr (vs, tvs) p e
 prettyExpr (v:vs, tvs) p (Fix t e) = pparens p $ hang 2 $ group $
   bold (text "fix") <+> (text v <> colon <> T.prettyType tvs False t) <> dot P.<$$> prettyExpr (vs, tvs) False (instantiate1 (Var v) e)
 prettyExpr (v:vs, tvs) p (Lam t b) = pparens p $ hang 2 $ group $

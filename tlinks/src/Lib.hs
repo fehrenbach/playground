@@ -648,6 +648,12 @@ tests =
   -- , ("`value` of traced terms has same type", prop_trace_value_type)
   ]
 
+comment :: String -> IO ()
+comment s = do
+  _ <- replicateM 5 (putStrLn "")
+  putStrLn s
+  putStrLn (take (length s) (repeat '-'))
+
 someFunc :: IO ()
 someFunc = do
   {-
@@ -702,13 +708,13 @@ someFunc = do
   let resultType = T.List (T.record [("department", T.String)
                                     ,("people", T.List (T.record [("name", T.String)
                                                                  ,("tasks", T.List T.String)]))])
-  putStrLn (show (S.paths resultType))
-  forM_ (S.paths resultType) (\p -> putC (S.outerShredding p resultType))
+  -- putStrLn (show (S.paths resultType))
+  -- forM_ (S.paths resultType) (\p -> putC (S.outerShredding p resultType))
 
-  putE $ wherep
+  -- putE $ wherep
   let agenciesRecordType = (T.record [("based_in", T.String)
-                                            ,("name", T.String)
-                                            ,("phone", T.String)])
+                                     ,("name", T.String)
+                                     ,("phone", T.String)])
   let agencies = Table "agencies" agenciesRecordType
 
   let externalToursRecordType = (T.record [("destination", T.String)
@@ -724,19 +730,33 @@ someFunc = do
              (Singleton (Record [("name", Proj "name" (Var "e" ::: externalToursRecordType))
                                 ,("phone", Proj "phone" (Var "a" ::: agenciesRecordType))]))
              (Empty q1rt)
+  comment "Boat tours (minus the boats, 'cause no &&)"
   putE $ q1
+  comment "Self-tracing boat tours (⊥ is `value`)"
+  putE (unroll 0 $ trace q1)
+  comment "Normalized self-tracing boat tours"
   let tq1 = (!! 145) . iterate one $ unroll 3 $ trace q1
   putE tq1
+
+  comment "value"
+  putE value
+
+  comment "1. boat tours; 2. normalized value of trace of boat tours"
   let vtq1 = (!! 145) . iterate one $ unroll 6 $ (value :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
+  putE q1
+  putStrLn "--------------"
   putE vtq1
+
+  comment "where-prov of trace of boat tours (normalized)"
   let wtq1 = (!! 145) . iterate one $ unroll 6 $ (wherep :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
   putE wtq1
 
-  putStrLn "linnotation:"
-  putE linnotation
-  putStrLn "lineage:"
-  putE lineage
+  -- putStrLn "linnotation:"
+  -- putE linnotation
+  -- putStrLn "lineage:"
+  -- putE lineage
 
+  comment "lineage of trace of boat tours (normalized)"
   let ltq1 = (!! 145) . iterate one $ unroll 7 $ (lineage :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
   putE ltq1
 
@@ -744,4 +764,5 @@ someFunc = do
   -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf
   -- recheck (Size 25) (Seed 6220584399433914846 (-6790911531265473973)) prop_norm_onenf
   -- recheck (Size 57) (Seed 3580701760170488301 (-3044242196768731585)) prop_norm_onenf
+
   void tests
