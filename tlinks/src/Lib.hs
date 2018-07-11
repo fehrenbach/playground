@@ -154,8 +154,7 @@ lineage = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.tracetf (T.Var (B 
   (Lam (toScope (toScope (T.Record (T.Var (B ())))))
     (toScope (Rmap (Var (F (B ()))) (toScope (toScope (T.Record (T.Var (B ()))))) (Var (B ())))))
   (Lam (toScope (toScope (T.App T.tracetf (T.Var (B ())))))
-   (toScope (Record [("data", liftCE (liftCE value) :§ toScope (toScope (T.App T.tracetf (T.Var (B ())))) :$ Var (B ()))
-                    ,("lineage", liftCE (liftCE linnotation) :§ toScope (toScope (T.App T.tracetf (T.Var (B ())))) :$ Var (B ()))])))
+   (toScope (liftCE (liftCE value) :§ toScope (toScope (T.App T.tracetf (T.Var (B ())))) :$ Var (B ()))))
 
 unroll :: Eq a => Monad c => Int -> Expr c a x -> Expr c a x
 unroll 0 (Fix _ _) = Const Bottom
@@ -362,6 +361,7 @@ data Query x
   | QUnionAll [Query x]
 -}
 
+-- TODO make this idempotent
 -- | Annotate bound variables with the types recorded in their binders
 annVars :: Eq a => Expr Type a x -> Expr Type a x
 annVars (Const c) = Const c
@@ -760,19 +760,20 @@ someFunc = do
   let ltq1 = (!! 145) . iterate one $ unroll 7 $ (lineage :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
   putE ltq1
 
-  -- comment "example of duplication"
-  -- let exdupl = (!! 145) . iterate one $ unroll 7 $ (lineage :§ (T.App T.tracetf (T.List (T.record [("a", T.Int), ("b", T.Bool), ("c", T.String)]))) :$ (trace
-                                                                                                                                     -- (annVars (for "x" (Table "xs" (T.record [("a", T.Int), ("b", T.Bool), ("c", T.String)])) $ Singleton (Var "x")))))
-  -- putE exdupl
-  
-  -- putC (T.List (T.record [("a", T.Int), ("b", T.Bool), ("c", T.String)]))
-  -- putC (T.App T.tracetf (T.List (T.record [("a", T.Int), ("b", T.Bool), ("c", T.String)])))
-  -- putC (T.norm (T.App T.tracetf (T.List (T.record [("a", T.Int), ("b", T.Bool), ("c", T.String)]))))
-  -- putC (T.norm (T.App T.lineagetf (T.App T.tracetf (T.List (T.record [("a", T.Int), ("b", T.Bool), ("c", T.String)])))))
+  comment "example of duplication"
+  let et = T.record [("a", T.Int), ("b", T.Bool), ("c", T.String)]
+  let eq = for "x" (Table "xs" et) $ Singleton (Var "x")
+  putE eq
+  -- let teq = trace (annVars eq)
+  let steq = (!! 7) . iterate one $ trace (annVars eq)
+  -- putE teq
+  -- putE steq
+  let lteq = (!! 145) . iterate one $ unroll 7 $ lineage :§ (T.App T.tracetf (T.List et)) :$ steq
+  putE lteq
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
   -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf
   -- recheck (Size 25) (Seed 6220584399433914846 (-6790911531265473973)) prop_norm_onenf
   -- recheck (Size 57) (Seed 3580701760170488301 (-3044242196768731585)) prop_norm_onenf
 
-  -- void tests
+  void tests
