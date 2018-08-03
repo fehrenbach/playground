@@ -202,6 +202,7 @@ Proof.
       (* Uh, do I need that x is unbound in G? That's not easy with
       the functional representation. Ugh. This is why people don't
       want to do substitution themselves... *) 
+      admit.
   - destruct (string_dec _ _).
     + admit.
     + simpl.
@@ -216,9 +217,7 @@ Proof.
   intros G m m' t.
   intros H step.
   generalize dependent m'.
-  induction H; subst.
-  - inversion 1.
-  - inversion 1.
+  induction H; subst; try solve [ inversion 1 ].
   - inversion 1. subst.
     constructor.
     auto.
@@ -230,5 +229,4 @@ Proof.
     + eauto using t_app.
     + eauto using t_app.
   - eauto using t_ab.
-  - inversion 1.
 Qed.
