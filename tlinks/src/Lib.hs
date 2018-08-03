@@ -134,8 +134,8 @@ linnotation = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.tracetf (T.Var
                            (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ Proj "in" (Var (B ()))
                                    , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (F (B ())))))) :$ Proj "out" (Var (B ()))]))
                           -- Row
-                         (toScope (Record [ ("table", Proj "table" (Var (B ())))
-                                          , ("row", Proj "row" (Var (B ())))]))
+                         (toScope (Singleton (Record [ ("table", Proj "table" (Var (B ())))
+                                                     , ("row", Proj "row" (Var (B ())))])))
                           -- Op==
                          (toScope
                            (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ Proj "left" (Var (B ()))
@@ -762,13 +762,13 @@ someFunc = do
 
   comment "example of duplication"
   let et = T.record [("a", T.Int), ("b", T.Bool), ("c", T.String)]
-  let eq = for "x" (Table "xs" et) $ Singleton (Var "x")
+  let eq = for "x" (Table "xs" et) $ Singleton (Proj "a" (Var "x"))
   putE eq
   -- let teq = trace (annVars eq)
   let steq = (!! 7) . iterate one $ trace (annVars eq)
   -- putE teq
-  -- putE steq
-  let lteq = (!! 145) . iterate one $ unroll 7 $ lineage :§ (T.App T.tracetf (T.List et)) :$ steq
+  putE steq
+  let lteq = (!! 145) . iterate one $ unroll 7 $ lineage :§ (T.App T.tracetf (T.List T.Int)) :$ steq
   putE lteq
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
