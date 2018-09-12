@@ -74,6 +74,10 @@ value = Fix (T.Forall T.KType (BS.toScope (T.Arrow
                                (Proj "left" (Var (B ()))))
                              ((:$) ((:§) (Var (F (F (B ())))) (toScope (toScope (toScope (T.Var (B ()))))))
                                (Proj "right" (Var (B ()))))))
+                    -- OpAnd
+                    (toScope (And
+                              (Var (F (F (B ()))) :§ toScope (toScope (T.Trace T.Bool)) :$ Proj "left" (Var (B ())))
+                              (Var (F (F (B ()))) :§ toScope (toScope (T.Trace T.Bool)) :$ Proj "right" (Var (B ())))))
                    )))
 
 wherep :: Eq a => Expr Type a x
@@ -105,7 +109,14 @@ wherep = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.Var (B ())) (T.App T.wher
                (toScope (Record [ ("data", Eq (toScope (toScope (toScope (T.Var (B ())))))
                                            (liftCE (liftCE (liftCE value)) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ (Proj "left" (Var (B ()))))
                                            (liftCE (liftCE (liftCE value)) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ (Proj "right" (Var (B ())))))
-                                , ("table", string "facts"), ("column", string "alternative"), ("row", int (-1))])))))
+                                , ("table", string "facts"), ("column", string "alternative"), ("row", int (-1))]))
+             -- OpAnd
+             (toScope (Record [ ("data",
+                                 And
+                                  ((liftCE (liftCE value)) :§ toScope (toScope (T.Trace T.Bool)) :$ Proj "left" (Var (B ())))
+                                  ((liftCE (liftCE value)) :§ toScope (toScope (T.Trace T.Bool)) :$ Proj "right" (Var (B ()))))
+                              , ("table", string "facts"), ("column", string "alternative"), ("row", int (-1))]))
+             )))
 
 linnotation :: Eq a => Expr Type a x
 linnotation = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.tracetf (T.Var (B ())))
@@ -139,7 +150,18 @@ linnotation = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.tracetf (T.Var
                           -- Op==
                          (toScope
                            (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ Proj "left" (Var (B ()))
-                                   , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ Proj "right" (Var (B ()))])))))
+                                   , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.App T.tracetf (T.Var (B ()))))) :$ Proj "right" (Var (B ()))]))
+                          -- Op&&
+                          (toScope
+                            (Concat [ Var (F (F (B ())))
+                                      :§ toScope (toScope (T.Trace T.Bool))
+                                      :$ Proj "left" (Var (B ()))
+                                    , Var (F (F (B ())))
+                                      :§ toScope (toScope (T.Trace T.Bool))
+                                      :$ Proj "right" (Var (B ()))]))
+                           -- (Concat [ Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace T.Bool))) :$ Proj "left" (Var (B ()))
+                           --         , Var (F (F (B ()))) :§ toScope (toScope (toScope (T.Trace T.Bool))) :$ Proj "right" (Var (B ()))]))
+                        )))
 
 lineage :: Eq a => Expr Type a x
 lineage = Fix (T.Forall T.KType (BS.toScope (T.Arrow (T.App T.tracetf (T.Var (B ()))) (T.App T.lineagetf (T.Var (B ())))))) $ toScope $ TLam T.KType $ Typecase (toScope (T.Var (B ())))
@@ -176,14 +198,16 @@ unroll _ (Table name t) = Table name t
 unroll n (Rmap a t b) = Rmap (unroll n a) t (unroll n b)
 unroll n (Rfold a b c t) = Rfold (unroll n a) (unroll n b) (unroll n c) t
 unroll n (Eq t l r) = Eq t (unroll n l) (unroll n r)
+unroll n (And l r) = And (unroll n l) (unroll n r)
 unroll n (Typecase c b i s l r t) = Typecase c (unroll n b) (unroll n i) (unroll n s) (unroll n l) (unroll n r) (unroll n t)
-unroll n (Tracecase x l i f r oe) = Tracecase
+unroll n (Tracecase x l i f r oe oa) = Tracecase
   (unroll n x)
   (hoistScope (unroll n) l)
   (hoistScope (unroll n) i)
   (hoistScope (unroll n) f)
   (hoistScope (unroll n) r)
   (hoistScope (unroll n) oe)
+  (hoistScope (unroll n) oa)
 unroll n (Trace tr e) = Trace tr (unroll n e)
 unroll n (e ::: t) = (unroll n e) ::: t
 
@@ -259,20 +283,25 @@ one (Proj l e) = Proj l (one e)
 one (Eq _ Empty{} Empty{}) = Const (Bool True)
 one (Eq _ (Const l) (Const r)) = Const (Bool (l == r))
 one (Eq t l r) = Eq t (one l) (one r)
+one (And _ (Const (Bool False))) = Const (Bool False)
+one (And (Const (Bool False)) _) = Const (Bool False)
+one (And (Const (Bool True)) r) = r
+one (And l (Const (Bool True))) = l
+one (And l r) = And (one l) (one r) 
 one (Typecase c b i s l r t) = case c of
   T.Bool -> b; T.Int -> i; T.String -> s;
   T.List c' -> eInstantiateC1 c' l
   T.Record c' -> eInstantiateC1 c' r
   T.Trace c' -> eInstantiateC1 c' t
   _ -> Typecase (T.norm c) b i s l r t
-one (Tracecase (If c t e) l i f r oe) = If c (Tracecase t l i f r oe) (Tracecase e l i f r oe)
-one (Tracecase x l i f r oe) = case x of
+one (Tracecase (If c t e) l i f r oe oa) = If c (Tracecase t l i f r oe oa) (Tracecase e l i f r oe oa)
+one (Tracecase x l i f r oe oa) = case x of
   -- Record _ -> error "Record in tracecase. There's a type error somewhere"
   Trace tr t -> instantiate1 t (case tr of
-                                   TrLit -> l; TrIf -> i; TrRow -> r
+                                   TrLit -> l; TrIf -> i; TrRow -> r; TrAnd -> oa;
                                    TrFor c -> hoistScope (eInstantiateC1 c) f
                                    TrEq c -> hoistScope (eInstantiateC1 c) oe)
-  x' -> Tracecase (one x') l i f r oe
+  x' -> Tracecase (one x') l i f r oe oa
 one (Trace tr e) = Trace tr (one e)
 one (e ::: t) = one e ::: t
 
@@ -306,6 +335,7 @@ trace (Table n (T.Record row)) = For (Table n (T.Record row))
                                           ("row", Proj "oid" (Var (B ()))),
                                           ("data", Proj l (Var (B ())))])
 trace (Eq t l r) = Trace (TrEq (T.App T.tracetf t)) (Record [("left", trace l), ("right", trace r)])
+trace (And l r) = Trace TrAnd (Record [("left", trace l), ("right", trace r)])
 
 
 
@@ -380,6 +410,7 @@ annVars (e ::: t) = annVars e ::: t
 annVars (Record l) = Record (second annVars <$> l)
 annVars (Proj l e) = Proj l (annVars e)
 annVars (Eq t l r) = Eq t (annVars l) (annVars r)
+annVars (And l r) = And (annVars l) (annVars r)
 annVars (Table n t) = Table n t
 
 -- Calls dist, but applies the TRACE type function to the type argument first
@@ -442,6 +473,7 @@ typeof (Trace TrIf i) = typeof (Proj "out" i)
 typeof (Trace (TrFor _) i) = typeof (Proj "out" i)
 typeof (Trace TrRow r) = T.Trace (typeof (Proj "data" r))
 typeof (Trace (TrEq _) r) = T.Trace T.Bool
+typeof (Trace TrAnd r) = T.Trace T.Bool
 typeof (For i o) =
   let T.List t = T.norm (typeof i) in
   typeof (instantiate1 (Const Bottom ::: t) o)
@@ -451,6 +483,7 @@ typeof (Table _ (T.Record row)) =
 typeof (Table _ _) = error "nonrecord table type"
 typeof (Rmap _ _ _) = error "todo"
 typeof (Eq _ _ _) = T.Bool
+typeof (And _ _) = T.Bool
 typeof (Typecase x b i s l r t) = case T.norm x of
   T.Bool -> typeof b
   T.Int -> typeof i
@@ -465,6 +498,7 @@ isOneNF (Const Bottom) = False
 isOneNF (Var x) = x
 isOneNF (Const _) = True
 isOneNF (Eq _ l r) = isOneNF l && isOneNF r
+isOneNF (And l r) = isOneNF l && isOneNF r
 isOneNF (Empty _) = True
 isOneNF (Singleton e) = isOneNF e
 isOneNF (Concat l) = all (\case Empty{} -> False; x -> isOneNF x) l
@@ -569,6 +603,9 @@ genTypedExpr env ty = Gen.sized $ \size ->
                      l <- genTypedExpr env t
                      r <- genTypedExpr env t
                      pure (Eq t l r)
+                , do l <- genTypedExpr env T.Bool
+                     r <- genTypedExpr env T.Bool
+                     pure (And l r)
                 ]
       T.Int -> []
       T.String -> []
@@ -705,9 +742,9 @@ someFunc = do
   -- putC (typeof ex)
   -- putC (typeof n)
 
-  let resultType = T.List (T.record [("department", T.String)
-                                    ,("people", T.List (T.record [("name", T.String)
-                                                                 ,("tasks", T.List T.String)]))])
+  -- let resultType = T.List (T.record [("department", T.String)
+                                    -- ,("people", T.List (T.record [("name", T.String)
+                                                                 -- ,("tasks", T.List T.String)]))])
   -- putStrLn (show (S.paths resultType))
   -- forM_ (S.paths resultType) (\p -> putC (S.outerShredding p resultType))
 
@@ -726,7 +763,11 @@ someFunc = do
                       ,("phone", T.String)]
   let q1 = for "a" agencies $
            for "e" externalTours $
-           If (Eq T.String (Proj "name" (Var "a" ::: agenciesRecordType)) (Proj "name" (Var "e" ::: externalToursRecordType))) -- TODO && e.type == "boat"
+           If (And
+              -- a.name == e.name
+               (Eq T.String (Proj "name" (Var "a" ::: agenciesRecordType)) (Proj "name" (Var "e" ::: externalToursRecordType)))
+               -- e.type == "boat"
+               (Eq T.String (Proj "type" (Var "e" ::: externalToursRecordType)) (Const (String "boat"))))
              (Singleton (Record [("name", Proj "name" (Var "e" ::: externalToursRecordType))
                                 ,("phone", Proj "phone" (Var "a" ::: agenciesRecordType))]))
              (Empty q1rt)
