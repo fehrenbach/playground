@@ -311,6 +311,7 @@ tid = toScope (Var (B ()))
 trace :: HasCallStack => Show x => Eq a => Expr Type a x -> Expr Type a x
 trace (Var x) = error "Unannotated variables shouldn't happen, right?" -- Var x
 trace (Var x ::: t) = Var x -- ::: t
+trace (e ::: t) = trace e
 trace (Const c) = Trace TrLit (Const c)
 trace (If c t e) =
   If (value :§ T.Trace T.Bool :$ trace c)
@@ -334,10 +335,19 @@ trace (Table n (T.Record row)) = For (Table n (T.Record row))
                                           ("column", Const (String l)),
                                           ("row", Proj "oid" (Var (B ()))),
                                           ("data", Proj l (Var (B ())))])
+trace (Table _ _) = error "weird table type"
 trace (Eq t l r) = Trace (TrEq (T.App T.tracetf t)) (Record [("left", trace l), ("right", trace r)])
 trace (And l r) = Trace TrAnd (Record [("left", trace l), ("right", trace r)])
-
-
+trace Lam{} = error "Found lambda --- argument to trace must be normalized and of query type!"
+trace (_ :$ _) = error "Found application --- argument to trace must be normalized and of query type!"
+trace (_ :§ _) = error "Found type application --- argument to trace must be normalized and of query type!"
+trace Fix{} = error "can't trace fix"
+trace TLam{} = error "Found TLam"
+trace Rmap{} = error "rmap"
+trace Rfold{} = error "rfold"
+trace Typecase{} = error "typecase"
+trace Tracecase{} = error "tracecase"
+trace Trace{} = error "trace"
 
 {-
 -- Do I need to do if-hoisting as a separate normalization procedure
@@ -395,6 +405,10 @@ data Query x
 -- | Annotate bound variables with the types recorded in their binders
 annVars :: Eq a => Expr Type a x -> Expr Type a x
 annVars (Const c) = Const c
+annVars (a :$ b) = annVars a :$ annVars b
+annVars (Lam t b) = Lam t (toScope (annVars (fromScope b >>= \case
+                                                B () -> Var (B ()) ::: t
+                                                F x -> Var (F x))))
 annVars (For i o) =
   let T.List t = T.norm (typeof i) in
     For (annVars i) (toScope (annVars (fromScope o >>= \case
@@ -748,6 +762,65 @@ someFunc = do
   -- putStrLn (show (S.paths resultType))
   -- forM_ (S.paths resultType) (\p -> putC (S.outerShredding p resultType))
 
+  let departmentsRT = T.record [("name", T.String)]
+  let departments = Table "departments" departmentsRT
+  let employeesRT = T.record [("dept", T.String)
+                             ,("name", T.String)
+                             ,("salary", T.Int)]
+  let employees = Table "employees" employeesRT
+  let contactsRT = T.record [("dept", T.String)
+                            ,("name", T.String)
+                            ,("client", T.Bool)]
+  let contacts = Table "contacts" contactsRT
+  let tasksRT = T.record [("employee", T.String)
+                         ,("task", T.String)]
+  let tasks = Table "tasks" tasksRT
+
+  let contactsOfDept = lam "d" departmentsRT $
+                         for "c" contacts $
+                           If (Eq T.String (Proj "name" (Var "d")) (Proj "dept" (Var "c")))
+                              (Singleton (Record [("client", Proj "client" (Var "c"))
+                                                 ,("name", Proj "name" (Var "c"))]))
+                              (Empty (T.record [("client", T.Bool), ("name", T.String)]))
+
+  let tasksOfEmp = lam "e" employeesRT $
+                     for "t" tasks $
+                       If (Eq T.String (Proj "employee" (Var "t")) (Proj "name" (Var "e")))
+                          (Singleton (Proj "task" (Var "t")))
+                          (Empty T.String)
+  
+  let employeesOfDept = lam "d" departmentsRT $
+                          for "e" employees $
+                            If (Eq T.String (Proj "name" (Var "d")) (Proj "dept" (Var "e")))
+                               (Singleton (Record [("name", Proj "name" (Var "e"))
+                                                  ,("salary", Proj "salary" (Var "e"))
+                                                  ,("tasks", tasksOfEmp :$ Var "e")]))
+                               (Empty (T.record [("name", T.String)
+                                                ,("salary", T.Int)
+                                                ,("tasks", T.List T.String)]))
+  
+  let benchQ1 = for "d" departments $
+                  Singleton $ Record $ [("contacts", contactsOfDept :$ Var "d")
+                                       ,("employees", employeesOfDept :$ Var "d")
+                                       ,("name", Proj "name" (Var "d"))]
+  putE benchQ1
+  let tBenchQ1 = trace ((!! 145) . iterate one $ annVars benchQ1)
+  -- putE $ (!! 145) . iterate one $ unroll 3 $ tBenchQ1
+  let vBenchQ1 = (!! 1450) . iterate one $ unroll 12 $ (value :§ (T.App T.tracetf (T.List (T.record [("contacts", T.List (T.record [("client", T.Bool), ("name", T.String)]))
+                                                                                                  ,("employees", T.List (T.record [("name", T.String)
+                                                                                                                                  ,("salary", T.Int)
+                                                                                                                                  ,("tasks", T.List T.String)]))
+                                                                                                  ,("name", T.String)]))) :$ tBenchQ1)
+  putE vBenchQ1
+
+  let wBenchQ1 = (!! 1450) . iterate one $ unroll 12 $ wherep :§ (T.App T.tracetf (T.List (T.record [("contacts", T.List (T.record [("client", T.Bool), ("name", T.String)]))
+                                                                                                  ,("employees", T.List (T.record [("name", T.String)
+                                                                                                                                  ,("salary", T.Int)
+                                                                                                                                  ,("tasks", T.List T.String)]))
+                                                                                                  ,("name", T.String)]))) :$ tBenchQ1
+  putE wBenchQ1
+
+
   -- putE $ wherep
   let agenciesRecordType = (T.record [("based_in", T.String)
                                      ,("name", T.String)
@@ -759,9 +832,9 @@ someFunc = do
                                           ,("price", T.Int)
                                           ,("type", T.String)])
   let externalTours = Table "externalTours" externalToursRecordType
-  let q1rt = T.record [("name", T.String)
+  let boatToursrt = T.record [("name", T.String)
                       ,("phone", T.String)]
-  let q1 = for "a" agencies $
+  let boatTours = for "a" agencies $
            for "e" externalTours $
            If (And
               -- a.name == e.name
@@ -770,27 +843,27 @@ someFunc = do
                (Eq T.String (Proj "type" (Var "e" ::: externalToursRecordType)) (Const (String "boat"))))
              (Singleton (Record [("name", Proj "name" (Var "e" ::: externalToursRecordType))
                                 ,("phone", Proj "phone" (Var "a" ::: agenciesRecordType))]))
-             (Empty q1rt)
-  comment "Boat tours (minus the boats, 'cause no &&)"
-  putE $ q1
+             (Empty boatToursrt)
+  comment "Boat tours"
+  putE $ boatTours
   comment "Self-tracing boat tours (⊥ is `value`)"
-  putE (unroll 0 $ trace q1)
+  putE (unroll 0 $ trace boatTours)
   comment "Normalized self-tracing boat tours"
-  let tq1 = (!! 145) . iterate one $ unroll 3 $ trace q1
-  putE tq1
+  let tboatTours = (!! 145) . iterate one $ unroll 3 $ trace boatTours
+  putE tboatTours
 
   comment "value"
   putE value
 
   comment "1. boat tours; 2. normalized value of trace of boat tours"
-  let vtq1 = (!! 145) . iterate one $ unroll 6 $ (value :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
-  putE q1
+  let vtboatTours = (!! 145) . iterate one $ unroll 6 $ (value :§ (T.App T.tracetf (T.List boatToursrt)) :$ tboatTours)
+  putE boatTours
   putStrLn "--------------"
-  putE vtq1
+  putE vtboatTours
 
   comment "where-prov of trace of boat tours (normalized)"
-  let wtq1 = (!! 145) . iterate one $ unroll 6 $ (wherep :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
-  putE wtq1
+  let wtboatTours = (!! 145) . iterate one $ unroll 6 $ (wherep :§ (T.App T.tracetf (T.List boatToursrt)) :$ tboatTours)
+  putE wtboatTours
 
   -- putStrLn "linnotation:"
   -- putE linnotation
@@ -798,8 +871,8 @@ someFunc = do
   -- putE lineage
 
   comment "lineage of trace of boat tours (normalized)"
-  let ltq1 = (!! 145) . iterate one $ unroll 7 $ (lineage :§ (T.App T.tracetf (T.List q1rt)) :$ tq1)
-  putE ltq1
+  let ltboatTours = (!! 145) . iterate one $ unroll 7 $ (lineage :§ (T.App T.tracetf (T.List boatToursrt)) :$ tboatTours)
+  putE ltboatTours
 
   comment "example of duplication"
   let et = T.record [("a", T.Int), ("b", T.Bool), ("c", T.String)]
