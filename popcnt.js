@@ -85,4 +85,6 @@ WebAssembly.instantiate(bytes,{}).then(function (webassemblythingy) {
        js: 7.992919921875ms
        9884992
     */
+
+    // Firefox 63.0.0 improves to ~7-8ms WASM but stays at ~300ms JS
 });
