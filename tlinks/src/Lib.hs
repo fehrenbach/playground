@@ -734,6 +734,26 @@ comment s = do
   putStrLn s
   putStrLn (take (length s) (repeat '-'))
 
+printNWL q qt normsteps unrollsteps = do
+  -- let tq = (!! 400) . iterate one $ unroll 5 $ trace q
+  let tq = trace (annVars q)
+
+  comment "the query (normalized)"
+  putE q
+
+  comment "value of the query (normalized)"
+  let vtq = (!! normsteps) . iterate one $ unroll unrollsteps $ value :§ T.App T.tracetf (T.List qt) :$ tq
+  putE vtq
+
+  comment "wherep of the query (normalized)"
+  let wtq = (!! normsteps) . iterate one $ unroll unrollsteps $ wherep :§ T.App T.tracetf (T.List qt) :$ tq
+  putE wtq
+
+  comment "lineage of the query (normalized)"
+  let ltq = (!! normsteps) . iterate one $ unroll unrollsteps $ lineage :§ T.App T.tracetf (T.List qt) :$ tq
+  putE ltq
+
+
 someFunc :: IO ()
 someFunc = do
   {-
@@ -942,6 +962,28 @@ someFunc = do
   comment "lineage of trace of llinks query (normalized)"
   let ltq = (!! 600) . iterate one $ unroll 20 $ (lineage :§ (T.App T.tracetf (T.List qrt)) :$ tq)
   putE ltq
+
+  -- var QC4 = for (x <-- employees) for (y <-- employees)
+          -- where (x.dept == y.dept && x.name <> y.name)
+  -- [(a=x.name, b=y.name,
+    -- c=(for (t <-- tasks) where (x.name == t.employee) 
+         -- [(doer="a", task=t.task)]) 
+       -- ++ (for (t <-- tasks) where (y.name == t.employee)
+            -- [(doer="b", task=t.task)]))];
+
+  -- let qc4 = for "x" (Table "employees" employeesT) (for "y" (Table "employees" employeesT) (If (And (Eq T.String (Proj "dept" (Var "x")) (Proj "dept" (Var "y"))) (Eq _) (Singleton (Record [("a", Proj "name" (Var "x")), ("b", Proj "name" (Var "y")), ("c", Concat (for "t" (Table "tasks" tasksT) (If (Eq T.String (Proj "name" (Var "x")) (Proj "employee" (Var "t"))) (Singleton (Record [("doer", Const (String "a")), ("task", Proj "task" (Var "t"))])))) (for "t" (Table "tasks" tasksT) (If (Eq T.String (Proj "name" (Var "y")) (Proj "employee" (Var "t"))) (Singleton (Record [("doer", Const (String "b")), ("task", Proj "task" (Var "t"))])))))])) (Empty _))
+
+  -- var QF4 =
+  -- (for (t <-- tasks) where (t.task == "abstract") [t.employee]) ++
+  -- (for (e <-- employees) where (e.salary > 50000) [e.name]);
+  let tasksT = T.record [("employee", T.String), ("task", T.String)]
+  let employeesT = T.record [("dept", T.String), ("name", T.String), ("salary", T.Int)]
+  
+  let qf4 = Concat [for "e" (Table "employees" employeesT) (If (GEq (Const (Int 50000)) (Proj "salary" (Var "e"))) (Singleton (Proj "name" (Var "e"))) (Empty T.String))
+                   ,for "t" (Table "tasks" tasksT) (If (Eq T.String (Proj "task" (Var "t")) (Const (String "abstract"))) (Singleton (Proj "employee" (Var "t"))) (Empty T.String))]
+  let qf4t = T.String
+
+  printNWL qf4 qf4t 100 10
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
   -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf
