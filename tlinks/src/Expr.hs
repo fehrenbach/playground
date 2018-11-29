@@ -30,6 +30,7 @@ data Trace c
   | TrRow
   | TrEq c
   | TrAnd
+  | TrGEq
   deriving (Eq, Functor)
 
 data Const
@@ -60,6 +61,7 @@ data Expr c a x
   | Table String (c a) -- type of ELEMENTS/ROWS that is, a record type, not a list type
   | Eq (c a) (Expr c a x) (Expr c a x) -- equality specialized to a type
   | And (Expr c a x) (Expr c a x)
+  | GEq (Expr c a x) (Expr c a x)
   | Typecase (c a) (Expr c a x) (Expr c a x) (Expr c a x) (Expr (Scope () c) a x) (Expr (Scope () c) a x) (Expr (Scope () c) a x)
   | Trace (Trace (c a)) (Expr c a x)
   | Tracecase (Expr c a x) -- discriminant
@@ -69,6 +71,7 @@ data Expr c a x
                (Scope () (Expr c a) x) -- Row
                (Scope () (Expr (Scope () c) a) x) -- Eq
                (Scope () (Expr c a) x) -- And
+               (Scope () (Expr c a) x) -- GEq
   | Expr c a x ::: c a -- type ascription/annotation
   deriving (Functor)
 
@@ -101,9 +104,10 @@ instance (Eq a, Monad c) => Monad (Expr c a) where
   Table n t >>= _ = Table n t
   Eq t l r >>= f = Eq t (l >>= f) (r >>= f)
   And l r >>= f = And (l >>= f) (r >>= f)
+  GEq l r >>= f = GEq (l >>= f) (r >>= f)
   Typecase c b i s l r t >>= f = Typecase c (b >>= f) (i >>= f) (s >>= f) (l >>= liftCE . f) (r >>= liftCE . f) (t >>= liftCE . f)
-  Tracecase x l i g r q a >>= f =
-    Tracecase (x >>= f) (l >>>= f) (i >>>= f) (g >>>= liftCE . f) (r >>>= f) (q >>>= liftCE . f) (a >>>= f)
+  Tracecase x l i g r q a geq >>= f =
+    Tracecase (x >>= f) (l >>>= f) (i >>>= f) (g >>>= liftCE . f) (r >>>= f) (q >>>= liftCE . f) (a >>>= f) (geq >>>= f)
   Trace tc e >>= f = Trace tc (e >>= f)
   e ::: t >>= f = (e >>= f) ::: t
 
@@ -128,8 +132,9 @@ liftCE (Proj l e) = Proj l (liftCE e)
 liftCE (Table n t) = Table n (lift t)
 liftCE (Eq t l r) = Eq (lift t) (liftCE l) (liftCE r)
 liftCE (And l r) = And (liftCE l) (liftCE r)
+liftCE (GEq l r) = GEq (liftCE l) (liftCE r)
 liftCE (Typecase c b i s l r t) = Typecase (lift c) (liftCE b) (liftCE i) (liftCE s) (liftCE l) (liftCE r) (liftCE t)
-liftCE (Tracecase x l i f r oe oa) = Tracecase
+liftCE (Tracecase x l i f r oe oa ogeq) = Tracecase
   (liftCE x)
   (hoistScope liftCE l)
   (hoistScope liftCE i)
@@ -137,6 +142,7 @@ liftCE (Tracecase x l i f r oe oa) = Tracecase
   (hoistScope liftCE r)
   (hoistScope liftCE oe)
   (hoistScope liftCE oa)
+  (hoistScope liftCE ogeq)
 liftCE (Trace tr e) = Trace (fmap lift tr) (liftCE e)
 
 lam :: Eq x => x -> c a -> Expr c a x -> Expr c a x
@@ -167,8 +173,9 @@ eInstantiateC1 a (Proj l e) = Proj l (eInstantiateC1 a e)
 eInstantiateC1 a (Table n t) = Table n (instantiate1 a t)
 eInstantiateC1 a (Eq t l r) = Eq (instantiate1 a t) (eInstantiateC1 a l) (eInstantiateC1 a r)
 eInstantiateC1 a (And l r) = And (eInstantiateC1 a l) (eInstantiateC1 a r)
+eInstantiateC1 a (GEq l r) = GEq (eInstantiateC1 a l) (eInstantiateC1 a r)
 eInstantiateC1 a (Typecase c b i s l r t) = Typecase (instantiate1 a c) (eInstantiateC1 a b) (eInstantiateC1 a i) (eInstantiateC1 a s) (eInstantiateC1 (lift a) l) (eInstantiateC1 (lift a) r) (eInstantiateC1 (lift a) t)
-eInstantiateC1 a (Tracecase x l i f r oe oa) = Tracecase
+eInstantiateC1 a (Tracecase x l i f r oe oa ogeq) = Tracecase
   (eInstantiateC1 a x)
   (hoistScope (eInstantiateC1 a) l)
   (hoistScope (eInstantiateC1 a) i)
@@ -176,6 +183,7 @@ eInstantiateC1 a (Tracecase x l i f r oe oa) = Tracecase
   (hoistScope (eInstantiateC1 a) r)
   (hoistScope (eInstantiateC1 (lift a)) oe)
   (hoistScope (eInstantiateC1 a) oa)
+  (hoistScope (eInstantiateC1 a) ogeq)
 eInstantiateC1 a (Trace tr e) = Trace (fmap (instantiate1 a) tr) (eInstantiateC1 a e)
 
 -- abstract over a constructor in an expression
@@ -198,6 +206,7 @@ eAbstractC1 a (Proj l r) = Proj l (eAbstractC1 a r)
 eAbstractC1 a (Table n t) = Table n (abstract1 a t) -- not needed I think, should be base types..
 eAbstractC1 a (Eq t l r) = Eq (abstract1 a t) (eAbstractC1 a l) (eAbstractC1 a r)
 eAbstractC1 a (And l r) = And (eAbstractC1 a l) (eAbstractC1 a r)
+eAbstractC1 a (GEq l r) = GEq (eAbstractC1 a l) (eAbstractC1 a r)
 eAbstractC1 a (Typecase c b i s l r t) = Typecase (abstract1 a c) (eAbstractC1 a b) (eAbstractC1 a i) (eAbstractC1 a s) (eAbstractC1 a l) (eAbstractC1 a r) (eAbstractC1 a t)
 eAbstractC1 a (Trace tr e) = Trace (fmap (abstract1 a) tr) (eAbstractC1 a e)
 
@@ -241,6 +250,7 @@ prettyExpr ns _ (Singleton e) = brackets (prettyExpr ns False e)
 prettyExpr ns p (Concat l) = pparens p $ align (cat (punctuate (text " ++ ") (map (\e -> prettyExpr ns True e) l)))
 prettyExpr ns p (Eq _t l r) = pparens p $ prettyExpr ns True l <+> text "==" <+> prettyExpr ns True r
 prettyExpr ns p (And l r) = pparens p $ prettyExpr ns True l <+> text "&&" <+> prettyExpr ns True r
+prettyExpr ns p (GEq l r) = pparens p $ prettyExpr ns True l <+> text ">=" <+> prettyExpr ns True r
 prettyExpr (v:vs, tvs) p (For i o) = pparens p $ hang 2 $
   bold (text "for") <+> (hang 3 (parens (text v <+> text "<-" <+> prettyExpr (v:vs, tvs) False i))) P.<$> prettyExpr (vs, tvs) False (instantiate1 (Var v) o)
 prettyExpr _ _ (Record []) = braces empty
@@ -266,7 +276,7 @@ prettyExpr ns@(_, tvs) p (Rmap f _t r) = pparens p $
   bold (text "rmap") <+> prettyExpr ns True f <+> prettyExpr ns True r <+> T.prettyType tvs True _t
 prettyExpr ns@(_, tvs) p (Rfold f a r _t) = pparens p $
   bold (text "rfold") <+> prettyExpr ns True f <+> prettyExpr ns True a <+> prettyExpr ns True r <+> T.prettyType tvs True _t
-prettyExpr (v:vs, tv:tvs) p (Tracecase x l i f r oe a) = pparens p $
+prettyExpr (v:vs, tv:tvs) p (Tracecase x l i f r oe a ogeq) = pparens p $
   bold (text "tracecase") <+> prettyExpr (v:vs, tv:tvs) False x <+> bold (text "of") <$$>
   (indent 2 $
     text "Lit" <+> text v <+> text "=>" <+> prettyExpr (vs, tv:tvs) False (instantiate1 (Var v) l) <$$>
@@ -274,13 +284,15 @@ prettyExpr (v:vs, tv:tvs) p (Tracecase x l i f r oe a) = pparens p $
     text "For" <+> text tv <+> text v <+> text "=>" <+> prettyExpr (vs, tvs) False (eInstantiateC1 (T.Var tv) (instantiate1 (Var v) f)) <$$>
     text "Row" <+> text v <+> text "=>" <+> prettyExpr (vs, tv:tvs) False (instantiate1 (Var v) r) <$$>
     text "Op==" <+> text tv <+> text v <+> text "=>" <+> prettyExpr (vs, tvs) False (eInstantiateC1 (T.Var tv) (instantiate1 (Var v) oe)) <$$>
-    text "Op&&" <+> text v <+> text "=>" <+> prettyExpr (vs, tv:tvs) False (instantiate1 (Var v) r))
+    text "Op&&" <+> text v <+> text "=>" <+> prettyExpr (vs, tv:tvs) False (instantiate1 (Var v) r) <$$>
+    text "Op>=" <+> text v <+> text "=>" <+> prettyExpr (vs, tv:tvs) False (instantiate1 (Var v) r))
 prettyExpr ns p (Trace TrLit e) = pparens p $ green (text "Lit") <+> prettyExpr ns True e
 prettyExpr ns p (Trace TrRow e) = pparens p $ green (text "Row") <+> prettyExpr ns True e
 prettyExpr ns p (Trace TrIf e) = pparens p $ green (text "If") <+> prettyExpr ns True e
 prettyExpr ns@(_, tvs) p (Trace (TrFor c) e) = pparens p $ green (text "For") <+> {- T.prettyType tvs True c <+> -} prettyExpr ns True e
 prettyExpr ns@(_, tvs) p (Trace (TrEq c) e) = pparens p $ green (text "Eq") <+> {- prettyType tvs True c <+> -} prettyExpr ns True e
 prettyExpr ns p (Trace TrAnd e) = pparens p $ green (text "And") <+> prettyExpr ns True e
+prettyExpr ns p (Trace TrGEq e) = pparens p $ green (text "GEq") <+> prettyExpr ns True e
 
 instance Show (Expr Type String String) where
   showsPrec _ e = displayS (renderPretty 0.6 90 (prettyExpr (evars, tvars) False e))
