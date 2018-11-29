@@ -919,13 +919,29 @@ someFunc = do
               -- for (m <-- metro) where (m.date == i.date &&
                      -- m.time == 11 && m.trips >= 193000)
                 -- [i.date])]
-  let q = for "p" (Table "presidents" presidentsT) (Singleton (Record [("name", Proj "name" (Var "p")), ("dates", for "i" (Table "inaugurations" inaugurationsT) $
+  let q = annVars $ for "p" (Table "presidents" presidentsT) (Singleton (Record [("name", Proj "name" (Var "p")), ("dates", for "i" (Table "inaugurations" inaugurationsT) $
                for "m" (Table "metro" metroT) $
                If (And (Eq T.Int (Proj "nth" (Var "i")) (Proj "nth" (Var "p"))) (And (Eq T.String (Proj "date" (Var "m")) (Proj "date" (Var "i"))) (And (Eq T.Int (Proj "time" (Var "m")) (Const (Int 11))) (GEq (Proj "trips" (Var "m")) (Const (Int 193000))))))
                   (Singleton (Proj "date" (Var "i")))
                   (Empty T.String))]))
 
+  let tq = (!! 400) . iterate one $ unroll 5 $ trace q
+  -- putE q
+  let qrt = T.record [("name", T.String), ("dates", T.List T.String)]
+
+  comment "1. query from llinks chapter; 2. normalized value of that query"
+  let vtq = (!! 400) . iterate one $ unroll 10 $ (value :§ (T.App T.tracetf (T.List qrt)) :$ tq)
   putE q
+  putStrLn "--------------"
+  putE vtq
+
+  comment "where-prov of trace of llinks query (normalized)"
+  let wtq = (!! 300) . iterate one $ unroll 10 $ (wherep :§ (T.App T.tracetf (T.List qrt)) :$ tq)
+  putE wtq
+
+  comment "lineage of trace of llinks query (normalized)"
+  let ltq = (!! 600) . iterate one $ unroll 20 $ (lineage :§ (T.App T.tracetf (T.List qrt)) :$ tq)
+  putE ltq
 
   -- recheck (Size 6) (Seed 4698711793314857007 (-2004285861016953403)) prop_norm_onenf
   -- recheck (Size 8) (Seed 2462093613668237218 (-6374363080471542215)) prop_norm_onenf
